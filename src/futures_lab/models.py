@@ -1,0 +1,135 @@
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Side(str, Enum):
+    long = "long"
+    short = "short"
+
+
+class DecisionAction(str, Enum):
+    wait = "wait"
+    propose_long = "propose_long"
+    propose_short = "propose_short"
+    close = "close"
+
+
+class TradeMode(str, Enum):
+    fast = "fast"
+    slow = "slow"
+
+
+class Regime(str, Enum):
+    warming_up = "warming_up"
+    stale = "stale"
+    sideways = "sideways"
+    directional = "directional"
+    volatile = "volatile"
+    unknown = "unknown"
+
+
+class MarketState(BaseModel):
+    symbol: str
+    connected: bool = False
+    last_event_at: datetime | None = None
+    last_received_at: datetime | None = None
+    data_age_seconds: float | None = None
+    observed_seconds: float = 0.0
+    best_bid: float | None = None
+    best_ask: float | None = None
+    best_bid_qty: float | None = None
+    best_ask_qty: float | None = None
+    mid_price: float | None = None
+    spread_bps: float | None = None
+    last_trade_price: float | None = None
+    mark_price: float | None = None
+    funding_rate: float | None = None
+    return_15s_pct: float | None = None
+    return_60s_pct: float | None = None
+    return_180s_pct: float | None = None
+    realized_vol_60s_pct: float | None = None
+    realized_vol_180s_pct: float | None = None
+    range_180s_pct: float | None = None
+    range_high_180s: float | None = None
+    range_low_180s: float | None = None
+    range_position_180s: float | None = None
+    taker_buy_ratio_10s: float | None = None
+    taker_buy_ratio_30s: float | None = None
+    book_imbalance_top: float | None = None
+    regime: Regime = Regime.unknown
+
+
+class Decision(BaseModel):
+    timestamp: datetime = Field(default_factory=utc_now)
+    symbol: str
+    action: DecisionAction
+    mode: TradeMode | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str
+    entry_price: float | None = None
+    take_profit_price: float | None = None
+    stop_loss_price: float | None = None
+    target_move_pct: float | None = None
+    stop_move_pct: float | None = None
+    leverage: int | None = None
+    stake_usd: float | None = None
+    notional_usd: float | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class RiskVerdict(BaseModel):
+    allowed: bool
+    reason: str
+    blockers: list[str] = Field(default_factory=list)
+
+
+class PaperPosition(BaseModel):
+    symbol: str
+    side: Side
+    mode: TradeMode
+    entry_price: float
+    quantity: float
+    stake_usd: float
+    notional_usd: float
+    leverage: int
+    take_profit_price: float
+    stop_loss_price: float
+    opened_at: datetime
+    confidence: float
+
+
+class PaperTrade(BaseModel):
+    symbol: str
+    side: Side
+    mode: TradeMode
+    entry_price: float
+    exit_price: float
+    quantity: float
+    stake_usd: float
+    notional_usd: float
+    leverage: int
+    gross_pnl_usd: float
+    fees_usd: float
+    net_pnl_usd: float
+    exit_reason: str
+    opened_at: datetime
+    closed_at: datetime
+
+
+class PaperState(BaseModel):
+    day: str
+    account_equity_usd: float
+    realized_pnl_usd: float
+    trades_today: int
+    daily_target_hit: bool
+    daily_max_loss_hit: bool
+    open_position: PaperPosition | None = None
+    last_trade: PaperTrade | None = None
+

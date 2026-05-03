@@ -1,0 +1,29 @@
+[project]
+name = "futures-lab"
+version = "0.1.0"
+description = "API-first crypto futures research, paper trading, and live-ready strategy lab"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110,<1",
+  "uvicorn[standard]>=0.29,<1",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.2,<3",
+  "websockets>=12,<16",
+  "numpy>=1.26,<3",
+  "python-dotenv>=1,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+]
+nautilus = [
+  "nautilus_trader>=1.220,<2",
+]
+
+[project.scripts]
+futures-lab = "futures_lab.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
