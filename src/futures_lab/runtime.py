@@ -7,6 +7,7 @@ from futures_lab.config import Settings
 from futures_lab.market_state import MarketStateBook
 from futures_lab.models import Decision, MarketState, PaperState, RiskVerdict
 from futures_lab.paper import PaperBroker
+from futures_lab.recon_log import ReconLogger
 from futures_lab.risk import RiskEngine
 from futures_lab.strategy import HitAndRunStrategy
 
@@ -20,6 +21,7 @@ class TradingRuntime:
     strategy: HitAndRunStrategy
     risk: RiskEngine
     paper: PaperBroker
+    recon_log: ReconLogger
 
     def __post_init__(self) -> None:
         self.latest_market: MarketState | None = None
@@ -40,6 +42,7 @@ class TradingRuntime:
             strategy=HitAndRunStrategy(settings),
             risk=RiskEngine(settings),
             paper=PaperBroker(settings),
+            recon_log=ReconLogger(settings),
         )
 
     def is_running(self) -> bool:
@@ -84,9 +87,12 @@ class TradingRuntime:
         interval = max(0.1, self.settings.decision_interval_ms / 1000)
         while not self._stop.is_set():
             market, decision, risk = self.decide_once()
+            self.recon_log.write_feature(market)
+            self.recon_log.write_decision(market, decision, risk)
             closed = self.paper.mark(market)
             if closed is not None:
                 self.audit.write("paper_close", closed.model_dump())
+                self.recon_log.write_paper_trade(closed)
             if risk.allowed:
                 opened = self.paper.open_from_decision(decision)
                 if opened is not None:
@@ -105,4 +111,3 @@ class TradingRuntime:
                         },
                     )
             await asyncio.sleep(interval)
-

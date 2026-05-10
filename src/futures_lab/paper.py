@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 from futures_lab.config import Settings
+
 from futures_lab.models import (
     Decision,
     DecisionAction,
@@ -44,7 +45,7 @@ class PaperBroker:
         self.day = date.today().isoformat()
         return self.state()
 
-    def open_from_decision(self, decision: Decision) -> PaperPosition | None:
+    def open_from_decision(self, decision: Decision, opened_at: datetime | None = None) -> PaperPosition | None:
         self._reset_day_if_needed()
         if self.open_position is not None:
             return None
@@ -73,29 +74,29 @@ class PaperBroker:
             leverage=decision.leverage,
             take_profit_price=decision.take_profit_price,
             stop_loss_price=decision.stop_loss_price,
-            opened_at=utc_now(),
+            opened_at=opened_at or utc_now(),
             confidence=decision.confidence,
         )
         return self.open_position
 
-    def mark(self, market: MarketState) -> PaperTrade | None:
+    def mark(self, market: MarketState, timestamp: datetime | None = None) -> PaperTrade | None:
         self._reset_day_if_needed()
         if self.open_position is None or market.mid_price is None:
             return None
         pos = self.open_position
         if pos.side == Side.long:
             if market.mid_price >= pos.take_profit_price:
-                return self.close(market.mid_price, "take_profit")
+                return self.close(market.mid_price, "take_profit", closed_at=timestamp)
             if market.mid_price <= pos.stop_loss_price:
-                return self.close(market.mid_price, "stop_loss")
+                return self.close(market.mid_price, "stop_loss", closed_at=timestamp)
         else:
             if market.mid_price <= pos.take_profit_price:
-                return self.close(market.mid_price, "take_profit")
+                return self.close(market.mid_price, "take_profit", closed_at=timestamp)
             if market.mid_price >= pos.stop_loss_price:
-                return self.close(market.mid_price, "stop_loss")
+                return self.close(market.mid_price, "stop_loss", closed_at=timestamp)
         return None
 
-    def close(self, exit_price: float, reason: str) -> PaperTrade:
+    def close(self, exit_price: float, reason: str, closed_at: datetime | None = None) -> PaperTrade:
         if self.open_position is None:
             raise ValueError("No paper position is open.")
         pos = self.open_position
@@ -118,7 +119,7 @@ class PaperBroker:
             net_pnl_usd=net,
             exit_reason=reason,
             opened_at=pos.opened_at,
-            closed_at=utc_now(),
+            closed_at=closed_at or utc_now(),
         )
         self.open_position = None
         self.last_trade = trade
@@ -135,4 +136,3 @@ class PaperBroker:
         self.trades_today = 0
         self.open_position = None
         self.last_trade = None
-

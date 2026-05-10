@@ -1,8 +1,9 @@
 import asyncio
+import gzip
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ class BinanceStreamRecorder:
     def __post_init__(self) -> None:
         self._task: asyncio.Task | None = None
         self._stop: asyncio.Event | None = None
+        self._last_recorded_at: dict[str, datetime] = {}
+        self._current_buckets: dict[str, str] = {}
         self.raw_dir = Path(self.settings.data_dir) / "raw_ws"
         self.raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,12 +58,10 @@ class BinanceStreamRecorder:
 
     async def _run(self) -> None:
         symbol = self.settings.symbol_lower
-        public_streams = "/".join(
-            [
-                f"{symbol}@bookTicker",
-                f"{symbol}@depth@100ms",
-            ]
-        )
+        public_stream_names = [f"{symbol}@bookTicker"]
+        if self.settings.record_depth_stream:
+            public_stream_names.append(f"{symbol}@depth@100ms")
+        public_streams = "/".join(public_stream_names)
         market_streams = "/".join(
             [
                 f"{symbol}@aggTrade",
@@ -98,12 +99,55 @@ class BinanceStreamRecorder:
     def _record_raw(self, envelope: dict[str, Any]) -> None:
         payload = envelope.get("data", envelope)
         event = payload.get("e", "unknown")
-        path = self.raw_dir / f"{self.settings.symbol.upper()}_{event}_{date.today().isoformat()}.jsonl"
+        now = datetime.now(timezone.utc)
+        if not self._should_record_event(event, now):
+            return
+
+        bucket = self._bucket(now)
+        self._compress_previous_bucket(event, bucket)
+        path = self.raw_dir / f"{self.settings.symbol.upper()}_{event}_{bucket}.jsonl"
         row = {
-            "received_at": datetime.now(timezone.utc).isoformat(),
+            "received_at": now.isoformat(),
             "message": envelope,
         }
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, separators=(",", ":"), default=str))
             handle.write("\n")
 
+    def _should_record_event(self, event: str, now: datetime) -> bool:
+        if event == "depthUpdate" and not self.settings.record_depth_stream:
+            return False
+        if event != "bookTicker":
+            return True
+        interval = max(0, self.settings.record_book_ticker_min_interval_ms)
+        if interval <= 0:
+            return True
+        last = self._last_recorded_at.get(event)
+        if last is not None and (now - last).total_seconds() * 1000 < interval:
+            return False
+        self._last_recorded_at[event] = now
+        return True
+
+    def _bucket(self, now: datetime) -> str:
+        rotation = max(1, self.settings.raw_rotation_minutes)
+        minute = (now.minute // rotation) * rotation if rotation < 60 else 0
+        bucket = now.replace(minute=minute, second=0, microsecond=0)
+        return bucket.strftime("%Y-%m-%dT%H%MZ")
+
+    def _compress_previous_bucket(self, event: str, current_bucket: str) -> None:
+        previous_bucket = self._current_buckets.get(event)
+        if previous_bucket is None:
+            self._current_buckets[event] = current_bucket
+            return
+        if previous_bucket == current_bucket:
+            return
+        self._current_buckets[event] = current_bucket
+        if not self.settings.compress_rotated_raw:
+            return
+        raw_path = self.raw_dir / f"{self.settings.symbol.upper()}_{event}_{previous_bucket}.jsonl"
+        gz_path = raw_path.with_suffix(raw_path.suffix + ".gz")
+        if not raw_path.exists() or gz_path.exists():
+            return
+        with raw_path.open("rb") as source, gzip.open(gz_path, "wb") as target:
+            target.writelines(source)
+        raw_path.unlink()

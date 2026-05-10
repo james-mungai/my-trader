@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     symbol: str = Field(default="BTCUSDT", alias="SYMBOL")
     binance_env: str = Field(default="LIVE", alias="BINANCE_ENV")
     record_raw_ws: bool = Field(default=True, alias="RECORD_RAW_WS")
+    record_depth_stream: bool = Field(default=False, alias="RECORD_DEPTH_STREAM")
+    record_book_ticker_min_interval_ms: int = Field(default=250, alias="RECORD_BOOK_TICKER_MIN_INTERVAL_MS")
+    raw_rotation_minutes: int = Field(default=60, alias="RAW_ROTATION_MINUTES")
+    compress_rotated_raw: bool = Field(default=True, alias="COMPRESS_ROTATED_RAW")
+    write_feature_log: bool = Field(default=True, alias="WRITE_FEATURE_LOG")
+    write_decision_log: bool = Field(default=True, alias="WRITE_DECISION_LOG")
+    write_paper_trade_log: bool = Field(default=True, alias="WRITE_PAPER_TRADE_LOG")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
     state_window_seconds: int = Field(default=900, alias="STATE_WINDOW_SECONDS")
     stale_after_seconds: float = Field(default=2.0, alias="STALE_AFTER_SECONDS")
@@ -57,4 +64,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

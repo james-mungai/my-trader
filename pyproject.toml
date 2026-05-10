@@ -24,6 +24,9 @@ nautilus = [
 [project.scripts]
 futures-lab = "futures_lab.cli:main"
 
+[tool.setuptools.package-data]
+futures_lab = ["static/*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

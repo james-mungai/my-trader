@@ -1,8 +1,11 @@
 import logging
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from futures_lab.config import get_settings
 from futures_lab.models import Decision, MarketState, PaperState, RiskVerdict
@@ -21,6 +24,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
@@ -44,6 +49,11 @@ def health() -> dict:
         "running": runtime.is_running(),
         "env": settings.app_env,
     }
+
+
+@app.get("/")
+def dashboard() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.post("/runtime/start")
@@ -91,4 +101,3 @@ def latest(_: None = Depends(require_api_key)) -> dict:
         "risk": runtime.latest_risk.model_dump() if runtime.latest_risk else None,
         "paper": runtime.paper_state().model_dump(),
     }
-

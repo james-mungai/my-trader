@@ -46,8 +46,8 @@ class MarketStateBook:
         if connected and self.started_at is None:
             self.started_at = now_utc()
 
-    def ingest(self, payload: dict) -> None:
-        received_at = now_utc()
+    def ingest(self, payload: dict, received_at: datetime | None = None) -> None:
+        received_at = received_at or now_utc()
         self.last_received_at = received_at
         event_ms = payload.get("E") or payload.get("T")
         if event_ms is not None:
@@ -90,8 +90,8 @@ class MarketStateBook:
             return (self.best_bid + self.best_ask) / 2
         return self.last_trade_price or self.mark_price
 
-    def snapshot(self) -> MarketState:
-        current = now_utc()
+    def snapshot(self, current: datetime | None = None) -> MarketState:
+        current = current or now_utc()
         mid = self.mid_price
         spread_bps = None
         if mid and self.best_bid is not None and self.best_ask is not None:
@@ -215,4 +215,3 @@ class MarketStateBook:
         if abs_return > 0.004 and state.range_180s_pct > 0.006:
             return Regime.directional
         return Regime.sideways
-

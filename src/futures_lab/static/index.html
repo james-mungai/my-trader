@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Futures Lab</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Futures Lab</h1>
+        <p id="runtimeLine">Connecting...</p>
+      </div>
+      <div class="controls">
+        <input id="apiToken" type="password" placeholder="API token" autocomplete="off" />
+        <button id="startBtn" type="button">Start</button>
+        <button id="stopBtn" type="button">Stop</button>
+        <button id="resetBtn" type="button">Reset Paper</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel primary">
+        <div class="panel-title">
+          <h2>Market</h2>
+          <span id="regimePill" class="pill">unknown</span>
+        </div>
+        <div class="price" id="midPrice">--</div>
+        <div class="metric-grid">
+          <div><span>Spread</span><strong id="spread">--</strong></div>
+          <div><span>Data Age</span><strong id="dataAge">--</strong></div>
+          <div><span>Range Position</span><strong id="rangePos">--</strong></div>
+          <div><span>Range 180s</span><strong id="rangePct">--</strong></div>
+          <div><span>Taker Buy 10s</span><strong id="flow10">--</strong></div>
+          <div><span>Book Imbalance</span><strong id="bookImb">--</strong></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Decision</h2>
+          <span id="actionPill" class="pill">wait</span>
+        </div>
+        <div class="metric-grid">
+          <div><span>Confidence</span><strong id="confidence">--</strong></div>
+          <div><span>Mode</span><strong id="mode">--</strong></div>
+          <div><span>Entry</span><strong id="entry">--</strong></div>
+          <div><span>Take Profit</span><strong id="takeProfit">--</strong></div>
+          <div><span>Stop Loss</span><strong id="stopLoss">--</strong></div>
+          <div><span>Notional</span><strong id="notional">--</strong></div>
+        </div>
+        <p class="reason" id="reason">--</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Risk</h2>
+          <span id="riskPill" class="pill">blocked</span>
+        </div>
+        <p class="reason" id="riskReason">--</p>
+        <ul id="riskBlockers" class="blockers"></ul>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Paper</h2>
+          <span id="targetPill" class="pill">active</span>
+        </div>
+        <div class="metric-grid">
+          <div><span>Realized PnL</span><strong id="pnl">--</strong></div>
+          <div><span>Trades Today</span><strong id="trades">--</strong></div>
+          <div><span>Open Side</span><strong id="openSide">--</strong></div>
+          <div><span>Open Entry</span><strong id="openEntry">--</strong></div>
+          <div><span>Open TP</span><strong id="openTp">--</strong></div>
+          <div><span>Last Trade</span><strong id="lastTrade">--</strong></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

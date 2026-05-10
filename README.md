@@ -124,6 +124,12 @@ Run API:
 uvicorn futures_lab.api:app --reload --host 127.0.0.1 --port 8090
 ```
 
+Open the local dashboard:
+
+```text
+http://127.0.0.1:8090/
+```
+
 Start streaming:
 
 ```bash
@@ -138,6 +144,53 @@ curl http://127.0.0.1:8090/decision
 curl http://127.0.0.1:8090/paper
 ```
 
+Record a recon session from the CLI:
+
+```bash
+futures-lab record --seconds 1800
+```
+
+Replay recorded raw WebSocket JSONL:
+
+```bash
+futures-lab replay
+```
+
+Replay one date or subset:
+
+```bash
+futures-lab replay --pattern 'BTCUSDT_*_2026-05-03.jsonl'
+```
+
+## All-Day Recon Storage
+
+The recorder is configured for all-day public-data collection without keeping every noisy tick forever:
+
+- `RECORD_DEPTH_STREAM=false` by default because the first strategy does not consume depth updates yet.
+- `RECORD_BOOK_TICKER_MIN_INTERVAL_MS=250` stores bookTicker at most four times per second.
+- `RAW_ROTATION_MINUTES=60` writes hourly raw files.
+- `COMPRESS_ROTATED_RAW=true` gzips completed hourly raw files.
+- `WRITE_FEATURE_LOG=true` writes compact feature snapshots.
+- `WRITE_DECISION_LOG=true` writes strategy/risk decisions.
+- `WRITE_PAPER_TRADE_LOG=true` writes closed paper trades.
+
+Useful output locations:
+
+```text
+data/raw_ws/        raw replayable WebSocket data
+data/features/      compact market features
+data/decisions/     decision/risk tape
+data/paper_trades/  closed paper trades
+```
+
+Tomorrow's recon command:
+
+```bash
+futures-lab record --seconds 28800 --quiet
+```
+
+That is an 8-hour run.
+
 ## Safety Boundary
 
 This system does not place live trades. It produces decisions, runs paper trades, records raw market
@@ -145,4 +198,3 @@ data, and prepares a clean path to demo/testnet/live integration.
 
 Live real-money futures execution must remain behind deterministic strategy rules, the risk engine,
 and explicit user-controlled permissions.
-
