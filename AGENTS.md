@@ -36,7 +36,28 @@ Binance public WebSockets
   -> HitAndRunStrategy
   -> RiskEngine
   -> PaperBroker
-  -> FastAPI / CLI / audit log
+  -> FastAPI / dashboard / CLI / compact recon logs / audit log
+```
+
+## Recon Storage Policy
+
+The repo is patched for all-day recon:
+
+- `RECORD_DEPTH_STREAM=false` by default because current strategy does not consume depth updates.
+- `RECORD_BOOK_TICKER_MIN_INTERVAL_MS=250` down-samples raw bookTicker storage.
+- `RAW_ROTATION_MINUTES=60` writes hourly raw files.
+- `COMPRESS_ROTATED_RAW=true` compresses completed raw files.
+- `WRITE_FEATURE_LOG=true` writes compact feature snapshots.
+- `WRITE_DECISION_LOG=true` writes strategy/risk decisions.
+- `WRITE_PAPER_TRADE_LOG=true` writes closed paper trades.
+
+Important output locations:
+
+```text
+data/raw_ws/        replayable raw WebSocket JSONL, ignored by Git
+data/features/      compact market feature JSONL, ignored by Git
+data/decisions/     decision/risk JSONL, ignored by Git
+data/paper_trades/  closed paper-trade JSONL, ignored by Git
 ```
 
 ## Development Commands
@@ -51,6 +72,24 @@ uvicorn futures_lab.api:app --reload --host 127.0.0.1 --port 8090
 futures-lab watch --seconds 30
 ```
 
+Serious recon run:
+
+```bash
+futures-lab record --seconds 28800 --quiet
+```
+
+Replay latest captured raw data:
+
+```bash
+futures-lab replay
+```
+
+Local dashboard:
+
+```text
+http://127.0.0.1:8090/
+```
+
 If `.venv` is absent:
 
 ```bash
@@ -61,8 +100,21 @@ pip install -e '.[dev]'
 
 On this machine, Python 3.13 was available at `/opt/homebrew/bin/python3.13`.
 
+## Current Local Checkpoint
+
+Latest important commit as of 2026-05-11:
+
+```text
+680b28c Add all-day recon storage and replay tools
+```
+
+Current tests:
+
+```text
+9 passed
+```
+
 ## Safety Notes
 
 This repo intentionally does not place live orders. Future live execution must require explicit user
 permission, deterministic rules, risk checks, and careful handling of API keys.
-
