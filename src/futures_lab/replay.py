@@ -11,6 +11,7 @@ from futures_lab.config import Settings
 from futures_lab.market_state import MarketStateBook
 from futures_lab.models import DecisionAction, MarketState, PaperPosition, PaperTrade, Side
 from futures_lab.paper import PaperBroker
+from futures_lab.regime_outcomes import RegimeOutcomeTracker
 from futures_lab.risk import RiskEngine
 from futures_lab.shadow import ShadowTradeTracker
 from futures_lab.strategy import HitAndRunStrategy
@@ -128,6 +129,9 @@ class ReplaySummary:
     shadow_closes: int = 0
     shadow_net_pnl_usd: float = 0.0
     shadow_events: list[dict] = field(default_factory=list)
+    regime_outcome_opens: int = 0
+    regime_outcome_closes: int = 0
+    regime_outcome_events: list[dict] = field(default_factory=list)
 
     @property
     def wins(self) -> int:
@@ -166,6 +170,9 @@ class ReplaySummary:
             "shadow_closes": self.shadow_closes,
             "shadow_net_pnl_usd": self.shadow_net_pnl_usd,
             "shadow_events": self.shadow_events,
+            "regime_outcome_opens": self.regime_outcome_opens,
+            "regime_outcome_closes": self.regime_outcome_closes,
+            "regime_outcome_events": self.regime_outcome_events,
         }
 
 
@@ -250,6 +257,7 @@ def replay_files(
     risk = RiskEngine(settings)
     paper = PaperBroker(settings)
     shadow = ShadowTradeTracker(settings)
+    regime_outcomes = RegimeOutcomeTracker(settings)
     summary = ReplaySummary(files=[str(path) for path in path_list])
     interval_ms = decision_interval_ms if decision_interval_ms is not None else settings.decision_interval_ms
     last_sample_at: datetime | None = None
@@ -291,6 +299,9 @@ def replay_files(
             summary.shadow_closes += 1
             summary.shadow_net_pnl_usd += float(event.get("net_pnl_usd") or 0.0)
             summary.shadow_events.append(event)
+        for event in regime_outcomes.mark(market, timestamp=message.received_at):
+            summary.regime_outcome_closes += 1
+            summary.regime_outcome_events.append(event)
 
         decision = strategy.decide(market)
         verdict = risk.evaluate(decision, market, paper.state())
@@ -308,6 +319,10 @@ def replay_files(
         if shadow_opened is not None:
             summary.shadow_opens += 1
             summary.shadow_events.append(shadow_opened)
+        regime_opened = regime_outcomes.open_from_decision(decision, market, opened_at=message.received_at)
+        if regime_opened is not None:
+            summary.regime_outcome_opens += 1
+            summary.regime_outcome_events.append(regime_opened)
 
     if flatten_at_end and paper.open_position is not None and last_market is not None and last_market.mid_price is not None:
         if active_stats is not None:
@@ -325,6 +340,9 @@ def replay_files(
             summary.shadow_closes += 1
             summary.shadow_net_pnl_usd += float(event.get("net_pnl_usd") or 0.0)
             summary.shadow_events.append(event)
+        for event in regime_outcomes.close_all(last_market, reason="session_end", timestamp=last_message_at):
+            summary.regime_outcome_closes += 1
+            summary.regime_outcome_events.append(event)
 
     if active_stats is not None and paper.open_position is not None:
         if last_market is not None:

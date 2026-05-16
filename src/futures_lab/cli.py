@@ -5,7 +5,7 @@ import time
 
 from futures_lab.audit import AuditLog
 from futures_lab.config import Settings
-from futures_lab.data_ops import compress_raw, prune_raw, summarize_data
+from futures_lab.data_ops import compress_raw, prune_raw, summarize_data, summarize_regime_outcomes
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.runtime import TradingRuntime
 
@@ -141,6 +141,8 @@ def main() -> None:
     data_summary_parser = sub.add_parser("data-summary", help="Summarize recon data storage.")
     data_summary_parser.add_argument("--largest", type=int, default=20)
 
+    sub.add_parser("regime-outcome-summary", help="Summarize deduped FSM regime outcome episodes.")
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -173,6 +175,8 @@ def main() -> None:
         )
     elif args.command == "data-summary":
         print(json.dumps(summarize_data(Settings(), largest=args.largest).model_dump(), indent=2))
+    elif args.command == "regime-outcome-summary":
+        print(json.dumps(summarize_regime_outcomes(Settings()).model_dump(), indent=2))
     elif args.command == "compress-raw":
         print(
             json.dumps(

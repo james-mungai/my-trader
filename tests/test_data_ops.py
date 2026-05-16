@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from futures_lab.config import Settings
-from futures_lab.data_ops import compress_raw, prune_raw, summarize_data
+from futures_lab.data_ops import compress_raw, prune_raw, summarize_data, summarize_regime_outcomes
 
 
 def test_data_summary_compresses_and_prunes_raw_files(tmp_path):
@@ -31,3 +31,30 @@ def test_data_summary_compresses_and_prunes_raw_files(tmp_path):
     pruned = prune_raw(settings, older_than_hours=1)
     assert pruned.changed == 1
     assert not gz_path.exists()
+
+
+def test_regime_outcome_summary_counts_targets_and_horizons(tmp_path):
+    outcome_dir = tmp_path / "regime_outcomes"
+    outcome_dir.mkdir(parents=True)
+    path = outcome_dir / "BTCUSDT_regime_outcomes_2026-05-16.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                '{"event":"open","side":"short","state":"short_continuation_confirmed","quality_score":0.81}',
+                '{"event":"close","close_reason":"max_horizon_elapsed","target_hits":{"0.001":{"hit":true},"0.002":{"hit":false}},"stop_hits":{"0.001":{"hit":false}},"target_before_stop":{"0.001":{"0.001":true}},"horizons":{"15":{"direction_correct":true},"60":{"direction_correct":false}}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize_regime_outcomes(Settings(DATA_DIR=str(tmp_path)))
+
+    assert summary.opens == 1
+    assert summary.closes == 1
+    assert summary.sides == {"short": 1}
+    assert summary.target_hits == {"0.001": 1}
+    assert summary.target_before_stop == {"0.001": {"0.001": 1}}
+    assert summary.horizon_direction_correct["15"] == {"correct": 1}
+    assert summary.horizon_direction_correct["60"] == {"wrong": 1}
+    assert summary.average_quality_score == 0.81

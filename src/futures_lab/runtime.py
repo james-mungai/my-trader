@@ -9,6 +9,7 @@ from futures_lab.market_state import MarketStateBook
 from futures_lab.models import Decision, MarketState, PaperState, RiskVerdict
 from futures_lab.paper import PaperBroker
 from futures_lab.recon_log import ReconLogger
+from futures_lab.regime_outcomes import RegimeOutcomeTracker
 from futures_lab.risk import RiskEngine
 from futures_lab.shadow import ShadowTradeTracker
 from futures_lab.strategy import HitAndRunStrategy
@@ -25,6 +26,7 @@ class TradingRuntime:
     risk: RiskEngine
     paper: PaperBroker
     shadow: ShadowTradeTracker
+    regime_outcomes: RegimeOutcomeTracker
     recon_log: ReconLogger
 
     def __post_init__(self) -> None:
@@ -48,6 +50,7 @@ class TradingRuntime:
             risk=RiskEngine(settings),
             paper=PaperBroker(settings),
             shadow=ShadowTradeTracker(settings),
+            regime_outcomes=RegimeOutcomeTracker(settings),
             recon_log=ReconLogger(settings),
         )
 
@@ -76,6 +79,9 @@ class TradingRuntime:
         for event in self.shadow.close_all(self.latest_market, reason="session_end"):
             self.audit.write("shadow_trade", event)
             self.recon_log.write_shadow_trade(event)
+        for event in self.regime_outcomes.close_all(self.latest_market, reason="session_end"):
+            self.audit.write("regime_outcome", event)
+            self.recon_log.write_regime_outcome(event)
         self.audit.write("runtime_stop", {"symbol": self.settings.symbol.upper()})
 
     def market(self) -> MarketState:
@@ -109,6 +115,9 @@ class TradingRuntime:
             for event in self.shadow.mark(market):
                 self.audit.write("shadow_trade", event)
                 self.recon_log.write_shadow_trade(event)
+            for event in self.regime_outcomes.mark(market):
+                self.audit.write("regime_outcome", event)
+                self.recon_log.write_regime_outcome(event)
             if risk.allowed:
                 opened = self.paper.open_from_decision(decision)
                 if opened is not None:
@@ -130,4 +139,8 @@ class TradingRuntime:
             if shadow_opened is not None:
                 self.audit.write("shadow_trade", shadow_opened)
                 self.recon_log.write_shadow_trade(shadow_opened)
+            regime_opened = self.regime_outcomes.open_from_decision(decision, market, opened_at=market.last_received_at)
+            if regime_opened is not None:
+                self.audit.write("regime_outcome", regime_opened)
+                self.recon_log.write_regime_outcome(regime_opened)
             await asyncio.sleep(interval)

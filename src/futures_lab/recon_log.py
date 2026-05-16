@@ -17,7 +17,14 @@ class ReconLogger:
         self.decisions_dir = Path(self.settings.data_dir) / "decisions"
         self.paper_dir = Path(self.settings.data_dir) / "paper_trades"
         self.shadow_dir = Path(self.settings.data_dir) / "shadow_trades"
-        for path in (self.features_dir, self.decisions_dir, self.paper_dir, self.shadow_dir):
+        self.regime_outcomes_dir = Path(self.settings.data_dir) / "regime_outcomes"
+        for path in (
+            self.features_dir,
+            self.decisions_dir,
+            self.paper_dir,
+            self.shadow_dir,
+            self.regime_outcomes_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
     def write_feature(self, market: MarketState) -> None:
@@ -72,6 +79,11 @@ class ReconLogger:
         if not self.settings.write_shadow_trade_log:
             return
         self._write(self.shadow_dir, "shadow_trades", row)
+
+    def write_regime_outcome(self, row: dict[str, Any]) -> None:
+        if not self.settings.write_regime_outcome_log:
+            return
+        self._write(self.regime_outcomes_dir, "regime_outcomes", row)
 
     def _write(self, directory: Path, prefix: str, row: dict[str, Any]) -> None:
         path = directory / f"{self.settings.symbol.upper()}_{prefix}_{datetime.now(timezone.utc).date().isoformat()}.jsonl"
