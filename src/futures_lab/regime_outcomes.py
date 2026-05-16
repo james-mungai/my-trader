@@ -54,10 +54,13 @@ class RegimeOutcomeTracker:
 
     def __post_init__(self) -> None:
         self.horizons_seconds = sorted(set(_parse_ints(self.settings.regime_outcome_horizons_seconds)))
+        self.early_horizons_seconds = sorted(set(_parse_ints(self.settings.regime_outcome_early_horizons_seconds)))
         self.target_moves_pct = sorted(set(_parse_floats(self.settings.regime_outcome_target_moves_pct)))
         self.stop_moves_pct = sorted(set(_parse_floats(self.settings.regime_outcome_stop_moves_pct)))
         if not self.horizons_seconds:
             self.horizons_seconds = [15, 30, 60, 180, 300, 900]
+        if not self.early_horizons_seconds:
+            self.early_horizons_seconds = [15, 30, 60]
         if not self.target_moves_pct:
             self.target_moves_pct = [0.001, 0.002, 0.0035, 0.005]
         if not self.stop_moves_pct:
@@ -198,6 +201,7 @@ class RegimeOutcomeTracker:
                 "stop_hits": episode.stop_hits,
                 "horizons": episode.horizons,
                 "target_before_stop": self._target_before_stop(episode),
+                "early_follow_through": self._early_follow_through(episode),
             }
         )
         return row
@@ -240,6 +244,28 @@ class RegimeOutcomeTracker:
                     matrix[target_key][stop_key] = target_time <= stop_time
         return matrix
 
+    def _early_follow_through(self, episode: RegimeOutcomeEpisode) -> dict:
+        horizon_rows = [episode.horizons.get(str(horizon)) or {} for horizon in self.early_horizons_seconds]
+        direction_correct = sum(1 for row in horizon_rows if row.get("direction_correct") is True)
+        best_target_key = _key(min(self.target_moves_pct)) if self.target_moves_pct else None
+        first_stop_key = _key(min(self.stop_moves_pct)) if self.stop_moves_pct else None
+        target_hit = bool(best_target_key and episode.target_hits.get(best_target_key, {}).get("hit"))
+        target_time = episode.target_hits.get(best_target_key, {}).get("first_hit_seconds") if best_target_key else None
+        stop_time = episode.stop_hits.get(first_stop_key, {}).get("first_hit_seconds") if first_stop_key else None
+        target_before_stop = target_hit and (stop_time is None or (target_time is not None and target_time <= stop_time))
+        return {
+            "horizons_seconds": self.early_horizons_seconds,
+            "direction_correct_count": direction_correct,
+            "required_correct_count": self.settings.regime_outcome_min_early_correct,
+            "target_key": best_target_key,
+            "stop_key": first_stop_key,
+            "target_before_stop": target_before_stop,
+            "qualified": (
+                direction_correct >= self.settings.regime_outcome_min_early_correct
+                and target_before_stop
+            ),
+        }
+
     def _quality_components(self, side: str, stateful: dict, market: MarketState) -> dict[str, float]:
         score = float(stateful.get("score") or 0.0)
         sequence = float(stateful.get("sequence_confidence") or 0.0)
@@ -252,6 +278,10 @@ class RegimeOutcomeTracker:
         depth = market.depth_imbalance_top5 if market.depth_imbalance_top5 is not None else book
         pressure = (book + depth) / 2.0
         pressure_component = (pressure + 1.0) / 2.0 if side == "long" else (-pressure + 1.0) / 2.0
+        trend = market.return_180s_pct or 0.0
+        trend_component = _clamp((trend if side == "long" else -trend) / max(0.000001, self.settings.stateful_adaptive_target_move_pct))
+        impulse = market.return_60s_pct or 0.0
+        impulse_component = _clamp((impulse if side == "long" else -impulse) / max(0.000001, self.settings.stateful_adaptive_target_move_pct * 0.60))
         oi = market.open_interest_change_5m_pct or 0.0
         oi_component = min(1.0, max(0.0, (oi + 0.001) / 0.003))
         stale_penalty = 1.0 if (market.data_age_seconds or 0.0) <= self.settings.stale_after_seconds else 0.0
@@ -261,19 +291,23 @@ class RegimeOutcomeTracker:
             "range_expansion": _clamp(range_component),
             "flow_alignment": _clamp(flow_component),
             "pressure_alignment": _clamp(pressure_component),
+            "trend_alignment": trend_component,
+            "impulse_alignment": impulse_component,
             "open_interest_context": _clamp(oi_component),
             "fresh_data": stale_penalty,
         }
 
     def _quality_score(self, components: dict[str, float]) -> float:
         score = (
-            0.25 * components["strategy_score"]
-            + 0.25 * components["sequence_confidence"]
-            + 0.15 * components["range_expansion"]
-            + 0.15 * components["flow_alignment"]
+            0.18 * components["strategy_score"]
+            + 0.18 * components["sequence_confidence"]
+            + 0.12 * components["range_expansion"]
+            + 0.14 * components["flow_alignment"]
             + 0.10 * components["pressure_alignment"]
+            + 0.10 * components["trend_alignment"]
+            + 0.05 * components["impulse_alignment"]
             + 0.05 * components["open_interest_context"]
-            + 0.05 * components["fresh_data"]
+            + 0.08 * components["fresh_data"]
         )
         return round(_clamp(score), 4)
 

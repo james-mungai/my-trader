@@ -599,6 +599,13 @@ class HitAndRunStrategy:
         adaptive_range = range_pct >= self._min_adaptive_range_pct()
         trend = market.return_180s_pct or 0.0
         trend_agrees = trend > 0 if side == "long" else trend < 0
+        quality_components = self._adaptive_quality_components(side, snapshot, market, score)
+        quality_score = self._weighted_quality_score(quality_components)
+        min_quality = (
+            self.settings.stateful_adaptive_min_quality_long
+            if side == "long"
+            else self.settings.stateful_adaptive_min_quality_short
+        )
         strong_structure = (
             market.regime == Regime.directional
             or (adaptive_range and trend_agrees and abs(trend) >= self.settings.stateful_adaptive_target_move_pct * 0.50)
@@ -619,10 +626,15 @@ class HitAndRunStrategy:
             blockers.append("adaptive_min_score")
         if score < opposing_score + 0.04:
             blockers.append("side_separation")
+        if quality_score < min_quality:
+            blockers.append("regime_quality")
 
         return {
             "allowed": not blockers,
             "blockers": blockers,
+            "quality_score": quality_score,
+            "min_quality": min_quality,
+            "quality_components": quality_components,
             "range_180s_pct": market.range_180s_pct,
             "min_adaptive_range_180s_pct": self._min_adaptive_range_pct(),
             "target_feasible": target_feasible,
@@ -642,8 +654,56 @@ class HitAndRunStrategy:
         if buy_10s is None or buy_30s is None:
             return False
         if side == "long":
-            return buy_10s >= 0.66 and buy_30s >= 0.54 and pressure >= 0.05
-        return buy_10s <= 0.34 and buy_30s <= self.settings.max_short_taker_buy_ratio_30s and pressure <= -0.05
+            return buy_10s >= 0.70 and buy_30s >= 0.60 and pressure >= 0.12 and (market.return_180s_pct or 0.0) > 0
+        return buy_10s <= 0.34 and buy_30s <= 0.52 and pressure <= -0.05 and (market.return_180s_pct or 0.0) < 0
+
+    def _adaptive_quality_components(
+        self,
+        side: str,
+        snapshot: MarketRegimeSnapshot,
+        market: MarketState,
+        score: float,
+    ) -> dict[str, float]:
+        range_pct = market.range_180s_pct or 0.0
+        range_component = self._clamp(range_pct / max(0.000001, self.settings.fast_target_move_pct))
+        buy_10s = market.taker_buy_ratio_10s if market.taker_buy_ratio_10s is not None else 0.5
+        buy_30s = market.taker_buy_ratio_30s if market.taker_buy_ratio_30s is not None else buy_10s
+        flow_10s = buy_10s if side == "long" else 1.0 - buy_10s
+        flow_30s = buy_30s if side == "long" else 1.0 - buy_30s
+        book = market.book_imbalance_top or 0.0
+        depth = market.depth_imbalance_top5 if market.depth_imbalance_top5 is not None else book
+        pressure = (book + depth) / 2.0
+        pressure_component = (pressure + 1.0) / 2.0 if side == "long" else (-pressure + 1.0) / 2.0
+        trend = market.return_180s_pct or 0.0
+        trend_component = self._clamp((trend if side == "long" else -trend) / self.settings.stateful_adaptive_target_move_pct)
+        r60 = market.return_60s_pct or 0.0
+        impulse_component = self._clamp((r60 if side == "long" else -r60) / (self.settings.stateful_adaptive_target_move_pct * 0.60))
+        freshness = 1.0 if (market.data_age_seconds or 0.0) <= self.settings.stale_after_seconds else 0.0
+        return {
+            "strategy_score": self._clamp(score),
+            "sequence_confidence": self._clamp(snapshot.confidence),
+            "range_expansion": range_component,
+            "flow_10s_alignment": self._clamp(flow_10s),
+            "flow_30s_alignment": self._clamp(flow_30s),
+            "pressure_alignment": self._clamp(pressure_component),
+            "trend_alignment": trend_component,
+            "impulse_alignment": impulse_component,
+            "fresh_data": freshness,
+        }
+
+    def _weighted_quality_score(self, components: dict[str, float]) -> float:
+        score = (
+            0.18 * components["strategy_score"]
+            + 0.18 * components["sequence_confidence"]
+            + 0.12 * components["range_expansion"]
+            + 0.14 * components["flow_10s_alignment"]
+            + 0.10 * components["flow_30s_alignment"]
+            + 0.10 * components["pressure_alignment"]
+            + 0.10 * components["trend_alignment"]
+            + 0.05 * components["impulse_alignment"]
+            + 0.03 * components["fresh_data"]
+        )
+        return round(self._clamp(score), 4)
 
     def _required_score(self, side: str, opposing_score: float, stateful_filter: dict | None) -> float:
         min_score = self.settings.min_confidence

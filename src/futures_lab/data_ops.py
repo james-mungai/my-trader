@@ -122,6 +122,8 @@ class RegimeOutcomeSummary:
     stop_hits: dict[str, int] = field(default_factory=dict)
     target_before_stop: dict[str, dict[str, int]] = field(default_factory=dict)
     horizon_direction_correct: dict[str, dict[str, int]] = field(default_factory=dict)
+    early_follow_through: dict[str, int] = field(default_factory=dict)
+    side_early_follow_through: dict[str, dict[str, int]] = field(default_factory=dict)
     average_quality_score: float | None = None
 
     def model_dump(self) -> dict:
@@ -137,6 +139,8 @@ class RegimeOutcomeSummary:
             "stop_hits": self.stop_hits,
             "target_before_stop": self.target_before_stop,
             "horizon_direction_correct": self.horizon_direction_correct,
+            "early_follow_through": self.early_follow_through,
+            "side_early_follow_through": self.side_early_follow_through,
             "average_quality_score": self.average_quality_score,
         }
 
@@ -154,6 +158,8 @@ def summarize_regime_outcomes(settings: Settings) -> RegimeOutcomeSummary:
     stop_hits: Counter[str] = Counter()
     target_before_stop: dict[str, Counter[str]] = {}
     horizon_direction_correct: dict[str, Counter[str]] = {}
+    early_follow_through: Counter[str] = Counter()
+    side_early_follow_through: dict[str, Counter[str]] = {}
     quality_scores: list[float] = []
 
     for path in sorted(outcome_dir.glob("*.jsonl")):
@@ -191,6 +197,13 @@ def summarize_regime_outcomes(settings: Settings) -> RegimeOutcomeSummary:
                         continue
                     counter = horizon_direction_correct.setdefault(horizon, Counter())
                     counter["correct" if value.get("direction_correct") else "wrong"] += 1
+                follow = row.get("early_follow_through") or {}
+                if follow:
+                    label = "qualified" if follow.get("qualified") else "failed"
+                    early_follow_through[label] += 1
+                    side = str(row.get("side"))
+                    side_counter = side_early_follow_through.setdefault(side, Counter())
+                    side_counter[label] += 1
 
     summary.sides = dict(sides)
     summary.states = dict(states)
@@ -199,6 +212,8 @@ def summarize_regime_outcomes(settings: Settings) -> RegimeOutcomeSummary:
     summary.stop_hits = dict(stop_hits)
     summary.target_before_stop = {target: dict(counter) for target, counter in target_before_stop.items()}
     summary.horizon_direction_correct = {horizon: dict(counter) for horizon, counter in horizon_direction_correct.items()}
+    summary.early_follow_through = dict(early_follow_through)
+    summary.side_early_follow_through = {side: dict(counter) for side, counter in side_early_follow_through.items()}
     summary.average_quality_score = round(sum(quality_scores) / len(quality_scores), 4) if quality_scores else None
     return summary
 

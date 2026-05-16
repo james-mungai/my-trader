@@ -41,7 +41,7 @@ def test_regime_outcome_summary_counts_targets_and_horizons(tmp_path):
         "\n".join(
             [
                 '{"event":"open","side":"short","state":"short_continuation_confirmed","quality_score":0.81}',
-                '{"event":"close","close_reason":"max_horizon_elapsed","target_hits":{"0.001":{"hit":true},"0.002":{"hit":false}},"stop_hits":{"0.001":{"hit":false}},"target_before_stop":{"0.001":{"0.001":true}},"horizons":{"15":{"direction_correct":true},"60":{"direction_correct":false}}}',
+                '{"event":"close","side":"short","close_reason":"max_horizon_elapsed","target_hits":{"0.001":{"hit":true},"0.002":{"hit":false}},"stop_hits":{"0.001":{"hit":false}},"target_before_stop":{"0.001":{"0.001":true}},"horizons":{"15":{"direction_correct":true},"60":{"direction_correct":false}},"early_follow_through":{"qualified":true}}',
             ]
         )
         + "\n",
@@ -57,4 +57,6 @@ def test_regime_outcome_summary_counts_targets_and_horizons(tmp_path):
     assert summary.target_before_stop == {"0.001": {"0.001": 1}}
     assert summary.horizon_direction_correct["15"] == {"correct": 1}
     assert summary.horizon_direction_correct["60"] == {"wrong": 1}
+    assert summary.early_follow_through == {"qualified": 1}
+    assert summary.side_early_follow_through == {"short": {"qualified": 1}}
     assert summary.average_quality_score == 0.81

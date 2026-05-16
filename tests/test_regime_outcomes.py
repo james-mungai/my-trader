@@ -80,6 +80,8 @@ def test_regime_outcome_tracker_dedupes_and_scores_horizons():
     assert outcome["target_hits"]["0.002"]["hit"] is True
     assert outcome["stop_hits"]["0.001"]["hit"] is False
     assert outcome["target_before_stop"]["0.002"]["0.001"] is True
+    assert outcome["early_follow_through"]["qualified"] is True
+    assert outcome["early_follow_through"]["direction_correct_count"] == 2
     assert outcome["horizons"]["15"]["direction_correct"] is True
     assert outcome["horizons"]["60"]["direction_correct"] is True
 
