@@ -24,6 +24,13 @@ nautilus = [
 [project.scripts]
 futures-lab = "futures_lab.cli:main"
 
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.setuptools.package-data]
 futures_lab = ["static/*"]
 

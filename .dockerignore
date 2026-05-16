@@ -1,19 +1,17 @@
+.git/
 .venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.egg-info/
 
 .env
 .env.*
 !.env.example
-deployments/aws/lightsail.env
 
-data/raw_ws/
-data/*.log
-data/*.jsonl
-data/reports/
-
+data/
+Dockerfile
+docker-compose.yml
 .DS_Store

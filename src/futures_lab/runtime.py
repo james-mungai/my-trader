@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from futures_lab.audit import AuditLog
 from futures_lab.binance_streams import BinanceStreamRecorder
 from futures_lab.config import Settings
+from futures_lab.context_polling import BinanceContextPoller
 from futures_lab.market_state import MarketStateBook
 from futures_lab.models import Decision, MarketState, PaperState, RiskVerdict
 from futures_lab.paper import PaperBroker
 from futures_lab.recon_log import ReconLogger
 from futures_lab.risk import RiskEngine
+from futures_lab.shadow import ShadowTradeTracker
 from futures_lab.strategy import HitAndRunStrategy
 
 
@@ -18,9 +20,11 @@ class TradingRuntime:
     audit: AuditLog
     state_book: MarketStateBook
     recorder: BinanceStreamRecorder
+    context: BinanceContextPoller
     strategy: HitAndRunStrategy
     risk: RiskEngine
     paper: PaperBroker
+    shadow: ShadowTradeTracker
     recon_log: ReconLogger
 
     def __post_init__(self) -> None:
@@ -39,9 +43,11 @@ class TradingRuntime:
             audit=audit,
             state_book=state_book,
             recorder=BinanceStreamRecorder(settings=settings, state=state_book, audit=audit),
+            context=BinanceContextPoller(settings=settings, state=state_book, audit=audit),
             strategy=HitAndRunStrategy(settings),
             risk=RiskEngine(settings),
             paper=PaperBroker(settings),
+            shadow=ShadowTradeTracker(settings),
             recon_log=ReconLogger(settings),
         )
 
@@ -50,6 +56,7 @@ class TradingRuntime:
 
     def start(self) -> None:
         self.recorder.start()
+        self.context.start()
         if self._task is None or self._task.done():
             self._stop = asyncio.Event()
             self._task = asyncio.create_task(self._decision_loop(), name="decision-loop")
@@ -65,6 +72,10 @@ class TradingRuntime:
             except asyncio.CancelledError:
                 pass
         await self.recorder.stop()
+        await self.context.stop()
+        for event in self.shadow.close_all(self.latest_market, reason="session_end"):
+            self.audit.write("shadow_trade", event)
+            self.recon_log.write_shadow_trade(event)
         self.audit.write("runtime_stop", {"symbol": self.settings.symbol.upper()})
 
     def market(self) -> MarketState:
@@ -86,13 +97,18 @@ class TradingRuntime:
         assert self._stop is not None
         interval = max(0.1, self.settings.decision_interval_ms / 1000)
         while not self._stop.is_set():
+            loop_started = asyncio.get_running_loop().time()
             market, decision, risk = self.decide_once()
+            decision_latency_ms = (asyncio.get_running_loop().time() - loop_started) * 1000
             self.recon_log.write_feature(market)
-            self.recon_log.write_decision(market, decision, risk)
+            self.recon_log.write_decision(market, decision, risk, decision_latency_ms=decision_latency_ms)
             closed = self.paper.mark(market)
             if closed is not None:
                 self.audit.write("paper_close", closed.model_dump())
                 self.recon_log.write_paper_trade(closed)
+            for event in self.shadow.mark(market):
+                self.audit.write("shadow_trade", event)
+                self.recon_log.write_shadow_trade(event)
             if risk.allowed:
                 opened = self.paper.open_from_decision(decision)
                 if opened is not None:
@@ -110,4 +126,8 @@ class TradingRuntime:
                             "notional_usd": opened.notional_usd,
                         },
                     )
+            shadow_opened = self.shadow.open_from_decision(decision, opened_at=market.last_received_at)
+            if shadow_opened is not None:
+                self.audit.write("shadow_trade", shadow_opened)
+                self.recon_log.write_shadow_trade(shadow_opened)
             await asyncio.sleep(interval)

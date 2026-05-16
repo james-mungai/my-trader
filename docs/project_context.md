@@ -62,18 +62,24 @@ The assistant should not:
 Primary data source is Binance USD-M Futures API/WebSocket data:
 
 - `bookTicker`
-- `depth@100ms`
+- `depth5@100ms`
 - `aggTrade`
 - `markPrice@1s`
 - `kline_1m`
+- `forceOrder`
 
 Current all-day recon defaults:
 
-- `depth@100ms` is available but not recorded by default: `RECORD_DEPTH_STREAM=false`.
+- top-5 depth is consumed by default with `CONSUME_DEPTH_STREAM=true`.
+- raw depth is not recorded by default: `RECORD_DEPTH_STREAM=false`.
+- liquidation pulses are consumed by default with `CONSUME_LIQUIDATION_STREAM=true`.
+- open interest is refreshed outside the hot path with `OPEN_INTEREST_POLL_SECONDS=30`.
 - raw `bookTicker` storage is downsampled with `RECORD_BOOK_TICKER_MIN_INTERVAL_MS=250`.
 - raw files rotate hourly with `RAW_ROTATION_MINUTES=60`.
 - completed raw files are compressed with `COMPRESS_ROTATED_RAW=true`.
 - compact feature, decision, and paper-trade logs are written by default.
+- fast-failure exits are disabled by default with `ENABLE_FAST_FAILURE_EXIT=false`; replay showed
+  they can cut valid slow-developing winners before TP.
 
 Important output locations:
 
@@ -103,8 +109,30 @@ The first strategy is an interpretable baseline, not the final edge:
 - use realized volatility
 - use taker buy/sell pressure
 - use top-of-book imbalance
+- use top-5 depth imbalance and wall concentration
+- use liquidation pulse context
+- use open-interest drift
+- log exchange event lag and decision latency
 - open paper position only when risk allows
 - close at take-profit or stop-loss
+
+The engine now supports deterministic strategy variants through `STRATEGY_VARIANT`:
+
+- `baseline`
+- `liquidity_sweep_reversal`
+- `momentum_pullback`
+- `stateful_momentum`
+
+Keep variants long/short symmetric. Do not encode a short-only rule just because the current tape is
+bearish.
+
+`stateful_momentum` is the hybrid FSM + Markov logger variant. It waits for a sequence rather than a
+single snapshot: bullish impulse -> pullback -> reclaim -> long continuation, or bearish impulse ->
+bounce -> rejection -> short continuation. Decision logs and replay summaries include transition
+counts/probabilities. A confirmed sequence still needs target feasibility: the recent 180s range must
+be large enough to make the configured fast target plausible. Confirmed-but-blocked sequences are
+logged as `stateful_momentum_filter` in decision evidence, including score, required range, and
+blockers.
 
 Next research direction:
 
@@ -126,20 +154,22 @@ Next research direction:
 Short check:
 
 ```bash
-futures-lab record --seconds 1800 --quiet
-futures-lab replay
+docker compose run --rm api futures-lab record --seconds 1800 --quiet
+docker compose run --rm api futures-lab replay --flatten-at-end
+docker compose run --rm api futures-lab data-summary
+docker compose run --rm api futures-lab compress-raw --all
 ```
 
 Serious all-day-style run:
 
 ```bash
-futures-lab record --seconds 28800 --quiet
+docker compose run --rm api futures-lab record --seconds 28800 --quiet
 ```
 
 Dashboard:
 
 ```bash
-uvicorn futures_lab.api:app --reload --host 127.0.0.1 --port 8090
+docker compose up --build
 ```
 
 Then open:

@@ -74,3 +74,271 @@ def test_strategy_proposes_short_near_range_high():
     assert decision.stop_loss_price is not None
     assert decision.stop_loss_price > decision.entry_price
 
+
+def test_strategy_blocks_short_when_30s_taker_flow_is_buy_biased():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, MAX_SHORT_TAKER_BUY_RATIO_30S=0.60))
+
+    decision = strategy.decide(
+        _market(
+            range_position_180s=0.96,
+            taker_buy_ratio_10s=0.18,
+            taker_buy_ratio_30s=0.74,
+            book_imbalance_top=-0.25,
+            return_15s_pct=-0.0001,
+        )
+    )
+
+    assert decision.action == DecisionAction.wait
+    assert "30s taker buy ratio" in decision.reason
+
+
+def test_liquidity_sweep_reversal_proposes_long_after_low_reclaim():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="liquidity_sweep_reversal"))
+
+    decision = strategy.decide(
+        _market(
+            range_position_180s=0.08,
+            return_15s_pct=0.0007,
+            return_60s_pct=-0.001,
+            taker_buy_ratio_10s=0.78,
+            book_imbalance_top=0.35,
+            depth_imbalance_top5=0.55,
+            short_liquidation_notional_30s=25_000,
+        )
+    )
+
+    assert decision.action == DecisionAction.propose_long
+    assert decision.evidence["strategy_variant"] == "liquidity_sweep_reversal"
+
+
+def test_liquidity_sweep_reversal_proposes_short_after_high_rejection():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="liquidity_sweep_reversal"))
+
+    decision = strategy.decide(
+        _market(
+            range_position_180s=0.94,
+            return_15s_pct=-0.0007,
+            return_60s_pct=0.001,
+            taker_buy_ratio_10s=0.20,
+            taker_buy_ratio_30s=0.30,
+            book_imbalance_top=-0.35,
+            depth_imbalance_top5=-0.55,
+            long_liquidation_notional_30s=25_000,
+        )
+    )
+
+    assert decision.action == DecisionAction.propose_short
+    assert decision.evidence["strategy_variant"] == "liquidity_sweep_reversal"
+
+
+def test_momentum_pullback_proposes_long_in_bullish_structure():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="momentum_pullback"))
+
+    decision = strategy.decide(
+        _market(
+            range_position_180s=0.55,
+            return_15s_pct=-0.0001,
+            return_60s_pct=0.0008,
+            return_180s_pct=0.0025,
+            taker_buy_ratio_10s=0.76,
+            book_imbalance_top=0.35,
+            depth_imbalance_top5=0.50,
+            open_interest_change_5m_pct=0.0015,
+        )
+    )
+
+    assert decision.action == DecisionAction.propose_long
+    assert decision.evidence["strategy_variant"] == "momentum_pullback"
+
+
+def test_momentum_pullback_proposes_short_in_bearish_structure():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="momentum_pullback"))
+
+    decision = strategy.decide(
+        _market(
+            range_position_180s=0.45,
+            return_15s_pct=0.0001,
+            return_60s_pct=-0.0008,
+            return_180s_pct=-0.0025,
+            taker_buy_ratio_10s=0.24,
+            taker_buy_ratio_30s=0.35,
+            book_imbalance_top=-0.35,
+            depth_imbalance_top5=-0.50,
+            open_interest_change_5m_pct=0.0015,
+        )
+    )
+
+    assert decision.action == DecisionAction.propose_short
+    assert decision.evidence["strategy_variant"] == "momentum_pullback"
+
+
+def test_stateful_momentum_waits_until_sequence_confirms_long():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        range_position_180s=0.55,
+        return_15s_pct=0.0002,
+        return_60s_pct=0.001,
+        return_180s_pct=0.0025,
+        taker_buy_ratio_10s=0.76,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.45,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    early = strategy.decide(impulse)
+    assert early.action == DecisionAction.wait
+    assert "confirmed sequence" in early.reason
+
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.0003, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00035, "taker_buy_ratio_10s": 0.72}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.0004, "taker_buy_ratio_10s": 0.74}))
+
+    assert confirmed.action == DecisionAction.propose_long
+    assert confirmed.evidence["market_sequence"]["state"] == "long_continuation_confirmed"
+
+
+def test_stateful_momentum_waits_until_sequence_confirms_short():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        range_position_180s=0.45,
+        return_15s_pct=-0.0002,
+        return_60s_pct=-0.001,
+        return_180s_pct=-0.0025,
+        taker_buy_ratio_10s=0.24,
+        taker_buy_ratio_30s=0.35,
+        book_imbalance_top=-0.35,
+        depth_imbalance_top5=-0.45,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    early = strategy.decide(impulse)
+    assert early.action == DecisionAction.wait
+    assert "confirmed sequence" in early.reason
+
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.0003, "taker_buy_ratio_10s": 0.44}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00035, "taker_buy_ratio_10s": 0.28}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.0004, "taker_buy_ratio_10s": 0.26}))
+
+    assert confirmed.action == DecisionAction.propose_short
+    assert confirmed.evidence["market_sequence"]["state"] == "short_continuation_confirmed"
+
+
+def test_stateful_momentum_accepts_confirmed_long_breakout_location():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        range_position_180s=0.97,
+        return_15s_pct=0.00025,
+        return_60s_pct=0.0009,
+        return_180s_pct=0.0026,
+        taker_buy_ratio_10s=0.74,
+        book_imbalance_top=0.25,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00032, "taker_buy_ratio_10s": 0.70}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.72}))
+
+    assert confirmed.action == DecisionAction.propose_long
+    assert confirmed.confidence >= 0.70
+    assert confirmed.evidence["market_sequence"]["state"] == "long_continuation_confirmed"
+    assert confirmed.evidence["stateful_momentum_filter"]["blocked"] is False
+    assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is True
+
+
+def test_stateful_momentum_accepts_confirmed_short_breakdown_location():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        range_position_180s=0.08,
+        return_15s_pct=-0.00025,
+        return_60s_pct=-0.0009,
+        return_180s_pct=-0.0026,
+        taker_buy_ratio_10s=0.26,
+        taker_buy_ratio_30s=0.35,
+        book_imbalance_top=-0.25,
+        depth_imbalance_top5=-0.55,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00032, "taker_buy_ratio_10s": 0.30}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00034, "taker_buy_ratio_10s": 0.28}))
+
+    assert confirmed.action == DecisionAction.propose_short
+    assert confirmed.confidence >= 0.70
+    assert confirmed.evidence["market_sequence"]["state"] == "short_continuation_confirmed"
+    assert confirmed.evidence["stateful_momentum_filter"]["blocked"] is False
+    assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is True
+
+
+def test_stateful_momentum_blocks_breakout_when_recent_range_cannot_support_target():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        range_180s_pct=0.002,
+        range_position_180s=0.02,
+        return_15s_pct=-0.00025,
+        return_60s_pct=-0.0009,
+        return_180s_pct=-0.0026,
+        taker_buy_ratio_10s=0.08,
+        taker_buy_ratio_30s=0.20,
+        book_imbalance_top=-0.90,
+        depth_imbalance_top5=-0.55,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00032, "taker_buy_ratio_10s": 0.12}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00034, "taker_buy_ratio_10s": 0.10}))
+
+    assert confirmed.action == DecisionAction.wait
+    assert "target feasibility blocked" in confirmed.reason
+    assert confirmed.evidence["market_sequence"]["state"] == "short_continuation_confirmed"
+    assert confirmed.evidence["stateful_momentum_filter"]["blocked"] is True
+    assert confirmed.evidence["stateful_momentum_filter"]["blockers"] == ["target_feasibility"]
+    assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is False
+    assert confirmed.evidence["stateful_momentum_filter"]["adaptive_entry_allowed"] is False
+    assert "shadow_trade" in confirmed.evidence["stateful_momentum_filter"]
+    assert confirmed.evidence["stateful_momentum_filter"]["range_180s_pct"] == 0.002
+    assert confirmed.evidence["stateful_momentum_filter"]["min_required_range_180s_pct"] == 0.003
+
+
+def test_stateful_momentum_adaptive_gate_allows_high_confidence_low_range_long():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.72,
+            STRATEGY_VARIANT="stateful_momentum",
+            STATEFUL_ADAPTIVE_MIN_SCORE=0.70,
+            STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE=0.85,
+        )
+    )
+    impulse = _market(
+        range_180s_pct=0.0026,
+        range_position_180s=0.92,
+        return_15s_pct=0.00032,
+        return_60s_pct=0.001,
+        return_180s_pct=0.0027,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.40,
+        depth_imbalance_top5=0.60,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.74}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00036, "taker_buy_ratio_10s": 0.76}))
+
+    assert confirmed.action == DecisionAction.propose_long
+    assert confirmed.mode is not None
+    assert confirmed.mode.value == "slow"
+    assert confirmed.leverage == 80
+    assert confirmed.target_move_pct == 0.0035
+    assert confirmed.evidence["trade_profile"] == "adaptive_low_range"
+    assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is False
+    assert confirmed.evidence["stateful_momentum_filter"]["adaptive_entry_allowed"] is True
+

@@ -16,6 +16,13 @@ class RiskEngine:
             blockers.append(f"confidence {decision.confidence:.2f} < {self.settings.min_confidence:.2f}")
         if paper.open_position is not None:
             blockers.append("paper position already open")
+        if paper.last_trade is not None and market.last_received_at is not None:
+            elapsed_since_close = (market.last_received_at - paper.last_trade.closed_at).total_seconds()
+            if elapsed_since_close < self.settings.trade_cooldown_seconds:
+                blockers.append(
+                    "trade cooldown active: "
+                    f"{elapsed_since_close:.0f}s < {self.settings.trade_cooldown_seconds}s"
+                )
         if paper.daily_target_hit:
             blockers.append("daily target already hit")
         if paper.daily_max_loss_hit:

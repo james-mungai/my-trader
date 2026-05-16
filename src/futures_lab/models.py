@@ -46,11 +46,19 @@ class MarketState(BaseModel):
     best_ask: float | None = None
     best_bid_qty: float | None = None
     best_ask_qty: float | None = None
+    depth_bid_qty_top5: float | None = None
+    depth_ask_qty_top5: float | None = None
+    depth_imbalance_top5: float | None = None
+    depth_bid_wall_ratio_top5: float | None = None
+    depth_ask_wall_ratio_top5: float | None = None
     mid_price: float | None = None
     spread_bps: float | None = None
     last_trade_price: float | None = None
     mark_price: float | None = None
     funding_rate: float | None = None
+    open_interest: float | None = None
+    open_interest_age_seconds: float | None = None
+    open_interest_change_5m_pct: float | None = None
     return_15s_pct: float | None = None
     return_60s_pct: float | None = None
     return_180s_pct: float | None = None
@@ -63,6 +71,14 @@ class MarketState(BaseModel):
     taker_buy_ratio_10s: float | None = None
     taker_buy_ratio_30s: float | None = None
     book_imbalance_top: float | None = None
+    liquidation_notional_30s: float | None = None
+    long_liquidation_notional_30s: float | None = None
+    short_liquidation_notional_30s: float | None = None
+    liquidation_buy_ratio_30s: float | None = None
+    last_stream_event_type: str | None = None
+    exchange_event_lag_ms: float | None = None
+    avg_event_lag_30s_ms: float | None = None
+    max_event_lag_30s_ms: float | None = None
     regime: Regime = Regime.unknown
 
 
@@ -103,6 +119,8 @@ class PaperPosition(BaseModel):
     stop_loss_price: float
     opened_at: datetime
     confidence: float
+    max_favorable_move_pct: float = 0.0
+    max_adverse_move_pct: float = 0.0
 
 
 class PaperTrade(BaseModel):

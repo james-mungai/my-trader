@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 
 from futures_lab.config import Settings
 from futures_lab.models import DecisionAction, MarketState, Regime
@@ -85,3 +86,113 @@ def test_risk_blocks_after_daily_target_hit():
 
     assert not verdict.allowed
     assert "daily target" in " ".join(verdict.blockers)
+
+
+def test_risk_blocks_during_trade_cooldown():
+    settings = Settings(MIN_CONFIDENCE=0.70, TRADE_COOLDOWN_SECONDS=1800)
+    broker = PaperBroker(settings)
+    market = _market()
+    decision = HitAndRunStrategy(settings).decide(market)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+    assert position is not None
+    broker.close(position.take_profit_price, "take_profit", closed_at=opened_at + timedelta(minutes=1))
+
+    next_market = _market(last_received_at=opened_at + timedelta(minutes=2))
+    next_decision = HitAndRunStrategy(settings).decide(next_market)
+    verdict = RiskEngine(settings).evaluate(next_decision, next_market, broker.state())
+
+    assert not verdict.allowed
+    assert "cooldown" in " ".join(verdict.blockers)
+
+
+def test_paper_fast_failure_exits_when_trade_does_not_move_enough():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        ENABLE_FAST_FAILURE_EXIT=True,
+        FAST_FAILURE_SECONDS=180,
+        FAST_FAILURE_MIN_FAVORABLE_MOVE_PCT=0.0005,
+    )
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert broker.mark(_market(100.02), timestamp=opened_at + timedelta(seconds=120)) is None
+
+    trade = broker.mark(_market(100.03), timestamp=opened_at + timedelta(seconds=181))
+
+    assert trade is not None
+    assert trade.exit_reason == "fast_failure"
+    assert position.max_favorable_move_pct < settings.fast_failure_min_favorable_move_pct
+
+
+def test_paper_does_not_close_from_stale_or_disconnected_market():
+    settings = Settings(MIN_CONFIDENCE=0.70, ENABLE_FAST_FAILURE_EXIT=True, FAST_FAILURE_SECONDS=180)
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    disconnected = _market(
+        position.stop_loss_price,
+        connected=False,
+        data_age_seconds=999,
+    )
+    stale = _market(
+        position.take_profit_price,
+        connected=True,
+        data_age_seconds=settings.stale_after_seconds + 1,
+    )
+
+    assert broker.mark(disconnected, timestamp=opened_at + timedelta(minutes=10)) is None
+    assert broker.mark(stale, timestamp=opened_at + timedelta(minutes=11)) is None
+    assert broker.state().open_position is not None
+
+
+def test_paper_can_disable_normal_price_stop_but_keeps_emergency_guard():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        ENABLE_PRICE_STOP=False,
+        ENABLE_FAST_FAILURE_EXIT=False,
+        EMERGENCY_MAX_ADVERSE_MOVE_PCT=0.004,
+    )
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert broker.mark(_market(position.stop_loss_price), timestamp=opened_at + timedelta(minutes=1)) is None
+
+    emergency_price = position.entry_price * (1 - settings.emergency_max_adverse_move_pct)
+    trade = broker.mark(_market(emergency_price), timestamp=opened_at + timedelta(minutes=2))
+
+    assert trade is not None
+    assert trade.exit_reason == "emergency_adverse_move"
+
+
+def test_paper_max_hold_can_close_position():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        ENABLE_PRICE_STOP=False,
+        ENABLE_FAST_FAILURE_EXIT=False,
+        MAX_POSITION_SECONDS=300,
+    )
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert broker.mark(_market(100.01), timestamp=opened_at + timedelta(seconds=299)) is None
+    trade = broker.mark(_market(100.01), timestamp=opened_at + timedelta(seconds=300))
+
+    assert trade is not None
+    assert trade.exit_reason == "max_hold"

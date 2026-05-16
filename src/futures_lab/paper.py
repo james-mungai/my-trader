@@ -83,18 +83,51 @@ class PaperBroker:
         self._reset_day_if_needed()
         if self.open_position is None or market.mid_price is None:
             return None
+        if not market.connected:
+            return None
+        if market.data_age_seconds is not None and market.data_age_seconds > self.settings.stale_after_seconds:
+            return None
         pos = self.open_position
+        current = timestamp or utc_now()
+        self._update_excursion(pos, market.mid_price)
         if pos.side == Side.long:
             if market.mid_price >= pos.take_profit_price:
-                return self.close(market.mid_price, "take_profit", closed_at=timestamp)
-            if market.mid_price <= pos.stop_loss_price:
-                return self.close(market.mid_price, "stop_loss", closed_at=timestamp)
+                return self.close(market.mid_price, "take_profit", closed_at=current)
+            if self.settings.enable_price_stop and market.mid_price <= pos.stop_loss_price:
+                return self.close(market.mid_price, "stop_loss", closed_at=current)
         else:
             if market.mid_price <= pos.take_profit_price:
-                return self.close(market.mid_price, "take_profit", closed_at=timestamp)
-            if market.mid_price >= pos.stop_loss_price:
-                return self.close(market.mid_price, "stop_loss", closed_at=timestamp)
+                return self.close(market.mid_price, "take_profit", closed_at=current)
+            if self.settings.enable_price_stop and market.mid_price >= pos.stop_loss_price:
+                return self.close(market.mid_price, "stop_loss", closed_at=current)
+        if pos.max_adverse_move_pct <= -abs(self.settings.emergency_max_adverse_move_pct):
+            return self.close(market.mid_price, "emergency_adverse_move", closed_at=current)
+        if self._should_close_fast_failure(pos, current):
+            return self.close(market.mid_price, "fast_failure", closed_at=current)
+        if self._should_close_max_hold(pos, current):
+            return self.close(market.mid_price, "max_hold", closed_at=current)
         return None
+
+    def _update_excursion(self, pos: PaperPosition, price: float) -> None:
+        direction = 1 if pos.side == Side.long else -1
+        move = ((price - pos.entry_price) / pos.entry_price) * direction
+        pos.max_favorable_move_pct = max(pos.max_favorable_move_pct, move)
+        pos.max_adverse_move_pct = min(pos.max_adverse_move_pct, move)
+
+    def _should_close_fast_failure(self, pos: PaperPosition, current: datetime) -> bool:
+        if not self.settings.enable_fast_failure_exit:
+            return False
+        if pos.mode.value != "fast":
+            return False
+        elapsed_seconds = (current - pos.opened_at).total_seconds()
+        if elapsed_seconds < self.settings.fast_failure_seconds:
+            return False
+        return pos.max_favorable_move_pct < self.settings.fast_failure_min_favorable_move_pct
+
+    def _should_close_max_hold(self, pos: PaperPosition, current: datetime) -> bool:
+        if self.settings.max_position_seconds <= 0:
+            return False
+        return (current - pos.opened_at).total_seconds() >= self.settings.max_position_seconds
 
     def close(self, exit_price: float, reason: str, closed_at: datetime | None = None) -> PaperTrade:
         if self.open_position is None:

@@ -59,16 +59,18 @@ class BinanceStreamRecorder:
     async def _run(self) -> None:
         symbol = self.settings.symbol_lower
         public_stream_names = [f"{symbol}@bookTicker"]
-        if self.settings.record_depth_stream:
-            public_stream_names.append(f"{symbol}@depth@100ms")
+        if self.settings.consume_depth_stream or self.settings.record_depth_stream:
+            levels = self._supported_depth_levels(self.settings.depth_levels)
+            public_stream_names.append(f"{symbol}@depth{levels}@100ms")
         public_streams = "/".join(public_stream_names)
-        market_streams = "/".join(
-            [
-                f"{symbol}@aggTrade",
-                f"{symbol}@markPrice@1s",
-                f"{symbol}@kline_1m",
-            ]
-        )
+        market_stream_names = [
+            f"{symbol}@aggTrade",
+            f"{symbol}@markPrice@1s",
+            f"{symbol}@kline_1m",
+        ]
+        if self.settings.consume_liquidation_stream:
+            market_stream_names.append(f"{symbol}@forceOrder")
+        market_streams = "/".join(market_stream_names)
         await asyncio.gather(
             self._consume(PUBLIC_WS_BASE + public_streams),
             self._consume(MARKET_WS_BASE + market_streams),
@@ -98,7 +100,7 @@ class BinanceStreamRecorder:
 
     def _record_raw(self, envelope: dict[str, Any]) -> None:
         payload = envelope.get("data", envelope)
-        event = payload.get("e", "unknown")
+        event = self._raw_event_name(envelope, payload)
         now = datetime.now(timezone.utc)
         if not self._should_record_event(event, now):
             return
@@ -115,7 +117,7 @@ class BinanceStreamRecorder:
             handle.write("\n")
 
     def _should_record_event(self, event: str, now: datetime) -> bool:
-        if event == "depthUpdate" and not self.settings.record_depth_stream:
+        if event in {"depthUpdate", "partialDepth"} and not self.settings.record_depth_stream:
             return False
         if event != "bookTicker":
             return True
@@ -151,3 +153,18 @@ class BinanceStreamRecorder:
         with raw_path.open("rb") as source, gzip.open(gz_path, "wb") as target:
             target.writelines(source)
         raw_path.unlink()
+
+    def _raw_event_name(self, envelope: dict[str, Any], payload: dict[str, Any]) -> str:
+        event = payload.get("e")
+        if event is not None:
+            return str(event)
+        stream = str(envelope.get("stream") or "")
+        if "@depth" in stream:
+            return "partialDepth"
+        return "unknown"
+
+    def _supported_depth_levels(self, requested: int) -> int:
+        for level in (5, 10, 20):
+            if requested <= level:
+                return level
+        return 20

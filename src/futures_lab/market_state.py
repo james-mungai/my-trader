@@ -24,6 +24,25 @@ class FlowPoint:
     taker_sell_qty: float
 
 
+@dataclass(frozen=True)
+class LiquidationPoint:
+    ts: datetime
+    side: str
+    notional: float
+
+
+@dataclass(frozen=True)
+class LatencyPoint:
+    ts: datetime
+    lag_ms: float
+
+
+@dataclass(frozen=True)
+class OpenInterestPoint:
+    ts: datetime
+    value: float
+
+
 @dataclass
 class MarketStateBook:
     settings: Settings
@@ -38,8 +57,16 @@ class MarketStateBook:
     last_trade_price: float | None = None
     mark_price: float | None = None
     funding_rate: float | None = None
+    open_interest: float | None = None
+    open_interest_updated_at: datetime | None = None
     prices: deque[PricePoint] = field(default_factory=deque)
     flows: deque[FlowPoint] = field(default_factory=deque)
+    liquidations: deque[LiquidationPoint] = field(default_factory=deque)
+    latencies: deque[LatencyPoint] = field(default_factory=deque)
+    open_interest_points: deque[OpenInterestPoint] = field(default_factory=deque)
+    depth_bids: dict[float, float] = field(default_factory=dict)
+    depth_asks: dict[float, float] = field(default_factory=dict)
+    last_stream_event_type: str | None = None
 
     def set_connected(self, connected: bool) -> None:
         self.connected = connected
@@ -52,8 +79,11 @@ class MarketStateBook:
         event_ms = payload.get("E") or payload.get("T")
         if event_ms is not None:
             self.last_event_at = datetime.fromtimestamp(int(event_ms) / 1000, tz=timezone.utc)
+            lag_ms = max(0.0, (received_at - self.last_event_at).total_seconds() * 1000)
+            self.latencies.append(LatencyPoint(ts=received_at, lag_ms=lag_ms))
 
-        event_type = payload.get("e")
+        event_type = self._event_type(payload)
+        self.last_stream_event_type = event_type
         if event_type == "bookTicker":
             self.best_bid = float(payload["b"])
             self.best_ask = float(payload["a"])
@@ -81,8 +111,30 @@ class MarketStateBook:
             self.funding_rate = float(payload["r"])
             if self.mid_price is None:
                 self.prices.append(PricePoint(ts=received_at, price=self.mark_price))
+        elif event_type in {"depthUpdate", "partialDepth"}:
+            self._ingest_depth(payload)
+        elif event_type == "forceOrder":
+            order = payload.get("o", {})
+            price = float(order.get("p") or order.get("ap") or 0.0)
+            qty = float(order.get("q") or 0.0)
+            notional = price * qty
+            if notional > 0:
+                self.liquidations.append(
+                    LiquidationPoint(
+                        ts=received_at,
+                        side=str(order.get("S", "")).upper(),
+                        notional=notional,
+                    )
+                )
 
         self._trim(received_at)
+
+    def set_open_interest(self, value: float, updated_at: datetime | None = None) -> None:
+        updated_at = updated_at or now_utc()
+        self.open_interest = value
+        self.open_interest_updated_at = updated_at
+        self.open_interest_points.append(OpenInterestPoint(ts=updated_at, value=value))
+        self._trim(updated_at)
 
     @property
     def mid_price(self) -> float | None:
@@ -117,11 +169,23 @@ class MarketStateBook:
             best_ask=self.best_ask,
             best_bid_qty=self.best_bid_qty,
             best_ask_qty=self.best_ask_qty,
+            depth_bid_qty_top5=self._depth_qty(self.depth_bids, reverse=True),
+            depth_ask_qty_top5=self._depth_qty(self.depth_asks, reverse=False),
+            depth_imbalance_top5=self._depth_imbalance(),
+            depth_bid_wall_ratio_top5=self._depth_wall_ratio(self.depth_bids, reverse=True),
+            depth_ask_wall_ratio_top5=self._depth_wall_ratio(self.depth_asks, reverse=False),
             mid_price=mid,
             spread_bps=spread_bps,
             last_trade_price=self.last_trade_price,
             mark_price=self.mark_price,
             funding_rate=self.funding_rate,
+            open_interest=self.open_interest,
+            open_interest_age_seconds=(
+                (current - self.open_interest_updated_at).total_seconds()
+                if self.open_interest_updated_at is not None
+                else None
+            ),
+            open_interest_change_5m_pct=self._open_interest_change_pct(current, 300),
             return_15s_pct=self._return_pct(current, 15),
             return_60s_pct=self._return_pct(current, 60),
             return_180s_pct=self._return_pct(current, 180),
@@ -134,6 +198,14 @@ class MarketStateBook:
             taker_buy_ratio_10s=self._taker_buy_ratio(current, 10),
             taker_buy_ratio_30s=self._taker_buy_ratio(current, 30),
             book_imbalance_top=self._book_imbalance_top(),
+            liquidation_notional_30s=self._liquidation_notional(current, 30),
+            long_liquidation_notional_30s=self._liquidation_notional(current, 30, side="SELL"),
+            short_liquidation_notional_30s=self._liquidation_notional(current, 30, side="BUY"),
+            liquidation_buy_ratio_30s=self._liquidation_buy_ratio(current, 30),
+            last_stream_event_type=self.last_stream_event_type,
+            exchange_event_lag_ms=self.latencies[-1].lag_ms if self.latencies else None,
+            avg_event_lag_30s_ms=self._latency_avg(current, 30),
+            max_event_lag_30s_ms=self._latency_max(current, 30),
         )
         state.regime = self._classify_regime(state)
         return state
@@ -144,6 +216,44 @@ class MarketStateBook:
             self.prices.popleft()
         while self.flows and self.flows[0].ts.timestamp() < cutoff:
             self.flows.popleft()
+        while self.liquidations and self.liquidations[0].ts.timestamp() < cutoff:
+            self.liquidations.popleft()
+        while self.latencies and self.latencies[0].ts.timestamp() < cutoff:
+            self.latencies.popleft()
+        while self.open_interest_points and self.open_interest_points[0].ts.timestamp() < cutoff:
+            self.open_interest_points.popleft()
+
+    def _event_type(self, payload: dict) -> str | None:
+        event_type = payload.get("e")
+        if event_type is None and ("bids" in payload or "asks" in payload):
+            return "partialDepth"
+        return event_type
+
+    def _ingest_depth(self, payload: dict) -> None:
+        bids = payload.get("b") or payload.get("bids") or []
+        asks = payload.get("a") or payload.get("asks") or []
+        if payload.get("e") == "depthUpdate":
+            self._apply_depth_delta(self.depth_bids, bids)
+            self._apply_depth_delta(self.depth_asks, asks)
+            self._trim_depth_books()
+            return
+        self.depth_bids = {float(price): float(qty) for price, qty in bids if float(qty) > 0}
+        self.depth_asks = {float(price): float(qty) for price, qty in asks if float(qty) > 0}
+        self._trim_depth_books()
+
+    def _apply_depth_delta(self, book: dict[float, float], levels: list) -> None:
+        for price_raw, qty_raw in levels:
+            price = float(price_raw)
+            qty = float(qty_raw)
+            if qty <= 0:
+                book.pop(price, None)
+            else:
+                book[price] = qty
+
+    def _trim_depth_books(self) -> None:
+        levels = max(1, self.settings.depth_levels)
+        self.depth_bids = dict(sorted(self.depth_bids.items(), reverse=True)[:levels])
+        self.depth_asks = dict(sorted(self.depth_asks.items())[:levels])
 
     def _prices_since(self, current: datetime, seconds: int) -> list[PricePoint]:
         cutoff = current.timestamp() - seconds
@@ -201,6 +311,75 @@ class MarketStateBook:
         if total <= 0:
             return None
         return (self.best_bid_qty - self.best_ask_qty) / total
+
+    def _depth_qty(self, book: dict[float, float], reverse: bool) -> float | None:
+        if not book:
+            return None
+        levels = sorted(book.items(), reverse=reverse)[: max(1, self.settings.depth_levels)]
+        return sum(qty for _, qty in levels)
+
+    def _depth_imbalance(self) -> float | None:
+        bid_qty = self._depth_qty(self.depth_bids, reverse=True)
+        ask_qty = self._depth_qty(self.depth_asks, reverse=False)
+        if bid_qty is None or ask_qty is None:
+            return None
+        total = bid_qty + ask_qty
+        if total <= 0:
+            return None
+        return (bid_qty - ask_qty) / total
+
+    def _depth_wall_ratio(self, book: dict[float, float], reverse: bool) -> float | None:
+        if not book:
+            return None
+        levels = [qty for _, qty in sorted(book.items(), reverse=reverse)[: max(1, self.settings.depth_levels)]]
+        total = sum(levels)
+        if total <= 0:
+            return None
+        return max(levels) / total
+
+    def _liquidation_notional(self, current: datetime, seconds: int, side: str | None = None) -> float | None:
+        cutoff = current.timestamp() - seconds
+        total = 0.0
+        seen = False
+        for point in self.liquidations:
+            if point.ts.timestamp() < cutoff:
+                continue
+            if side is not None and point.side != side:
+                continue
+            seen = True
+            total += point.notional
+        return total if seen else None
+
+    def _liquidation_buy_ratio(self, current: datetime, seconds: int) -> float | None:
+        buy = self._liquidation_notional(current, seconds, side="BUY") or 0.0
+        sell = self._liquidation_notional(current, seconds, side="SELL") or 0.0
+        total = buy + sell
+        if total <= 0:
+            return None
+        return buy / total
+
+    def _latencies_since(self, current: datetime, seconds: int) -> list[LatencyPoint]:
+        cutoff = current.timestamp() - seconds
+        return [point for point in self.latencies if point.ts.timestamp() >= cutoff]
+
+    def _latency_avg(self, current: datetime, seconds: int) -> float | None:
+        points = self._latencies_since(current, seconds)
+        if not points:
+            return None
+        return sum(point.lag_ms for point in points) / len(points)
+
+    def _latency_max(self, current: datetime, seconds: int) -> float | None:
+        points = self._latencies_since(current, seconds)
+        if not points:
+            return None
+        return max(point.lag_ms for point in points)
+
+    def _open_interest_change_pct(self, current: datetime, seconds: int) -> float | None:
+        cutoff = current.timestamp() - seconds
+        points = [point for point in self.open_interest_points if point.ts.timestamp() >= cutoff]
+        if len(points) < 2 or points[0].value <= 0:
+            return None
+        return (points[-1].value - points[0].value) / points[0].value
 
     def _classify_regime(self, state: MarketState) -> Regime:
         if state.data_age_seconds is None or state.data_age_seconds > self.settings.stale_after_seconds:

@@ -21,6 +21,11 @@ fast target = 0.5% underlying move
 gross target = about 150 USDT before fees/slippage
 ```
 
+The default recon risk model now allows one accepted paper trade per day/session. That matches the
+current research goal: prefer one high-quality setup, then stop and analyze rather than churn.
+Fast-failure exits are disabled by default after replay showed they can cut valid slow-developing
+winners before TP. They remain available as an explicit experiment switch.
+
 The slow mode exists for the tradeoff we discussed:
 
 ```text
@@ -34,10 +39,11 @@ stay open longer only when the regime supports it
 Public Binance USD-M Futures WebSockets:
 
 - `btcusdt@bookTicker`
-- `btcusdt@depth@100ms`
+- `btcusdt@depth5@100ms`
 - `btcusdt@aggTrade`
 - `btcusdt@markPrice@1s`
 - `btcusdt@kline_1m`
+- `btcusdt@forceOrder`
 
 The code uses Binance's upgraded split WebSocket routes:
 
@@ -62,6 +68,21 @@ Binance WebSockets
 ```
 
 The strategy evaluates every `DECISION_INTERVAL_MS` milliseconds. Default is 500ms.
+Deeper market context is updated continuously before the decision pass, so the live decision path only
+reads already-computed rolling features.
+
+Select the deterministic strategy with `STRATEGY_VARIANT`:
+
+- `baseline`: range-location hit-and-run with flow/book/depth confirmation.
+- `liquidity_sweep_reversal`: waits for a low/high sweep plus reclaim/rejection before entering.
+- `momentum_pullback`: joins short-horizon trend continuation after a controlled pullback or bounce.
+- `stateful_momentum`: hybrid finite-state/Markov variant that only enters after impulse -> controlled pullback/bounce -> re-acceleration confirmation, and only when the recent range can plausibly support the fast target.
+
+`ENABLE_MARKOV_STATE_MACHINE=true` logs the rolling sequence state and transition counts in decision
+evidence and replay summaries. This is deterministic bookkeeping, not ML.
+When `stateful_momentum` confirms a sequence, decision evidence also includes
+`stateful_momentum_filter` so near-misses show the confirmed side, score, target feasibility,
+required 180s range, and blocker that prevented entry.
 
 ## What Drives Decisions
 
@@ -73,6 +94,10 @@ The first strategy uses:
 - 60s/180s realized volatility
 - taker buy/sell ratio
 - top-of-book imbalance
+- top-5 depth imbalance and wall ratios
+- 30s liquidation pulse
+- open-interest drift, refreshed outside the hot path
+- exchange event lag / local decision latency
 - regime classification: warming up, stale, sideways, directional, volatile
 
 Fast mode is preferred in sideways conditions. Slow mode is available for less sideways regimes.
@@ -102,13 +127,113 @@ Install it later with:
 pip install -e '.[nautilus]'
 ```
 
-## Setup
+## Docker Setup
+
+Docker is the recommended default so the project runs the same way on Windows, macOS, and Linux.
 
 ```bash
-cd /Users/jamesmungai/myprojects/futures-lab
-python3.11 -m venv .venv
+cp .env.example .env
+docker compose up --build
+```
+
+Open the local dashboard:
+
+```text
+http://127.0.0.1:8090/
+```
+
+Run tests in the same container image:
+
+```bash
+docker compose run --rm api pytest -q
+```
+
+Record a recon session from the CLI:
+
+```bash
+docker compose run --rm api futures-lab record --seconds 1800
+```
+
+Replay recorded raw WebSocket JSONL:
+
+```bash
+docker compose run --rm api futures-lab replay
+```
+
+Replay with session-end flattening for accounting:
+
+```bash
+docker compose run --rm api futures-lab replay --flatten-at-end
+```
+
+Compare strategy variants on the same raw tape:
+
+```bash
+docker compose run --rm api futures-lab replay-compare --flatten-at-end
+```
+
+Summarize and maintain recon storage:
+
+```bash
+docker compose run --rm api futures-lab data-summary
+docker compose run --rm api futures-lab compress-raw --all
+docker compose run --rm api futures-lab prune-raw --older-than-hours 24 --dry-run
+```
+
+The Compose service stores runtime data in the `futures_lab_data` Docker volume mounted at
+`/app/data` inside the container.
+
+## AWS Deployment
+
+AWS deployment scaffolding lives under `deployments/aws/` and `scripts/aws/`.
+
+For the first cloud test, use Lightsail Containers in Tokyo:
+
+```text
+Region: ap-northeast-1
+Service size: medium
+Scale: 1
+```
+
+Build/push/deploy helpers:
+
+```powershell
+.\scripts\aws\build-lightsail-image.ps1
+.\scripts\aws\push-lightsail-image.ps1 -ServiceName futures-lab -Region ap-northeast-1
+.\scripts\aws\deploy-lightsail-container.ps1 -Image ":futures-lab.futures-lab.1" -ApiToken "<long-token>"
+```
+
+See `docs/cloud_deployment.md` for the full workflow and the tradeoff between Lightsail Containers
+and a Lightsail VM. Containers are convenient for API/live paper monitoring; a VM is better for
+durable recon data until S3 export is added.
+
+## Local Python Setup
+
+Use this only when you specifically want a host-machine development environment.
+
+Python 3.11+ is required. From the repository root:
+
+```bash
+python -m venv .venv
+```
+
+Activate the virtualenv for your shell:
+
+```bash
+# macOS/Linux
 source .venv/bin/activate
-pip install -e '.[dev]'
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# Windows cmd.exe
+.\.venv\Scripts\activate.bat
+```
+
+Install dependencies:
+
+```bash
+python -m pip install -e ".[dev]"
 cp .env.example .env
 ```
 
@@ -166,7 +291,10 @@ futures-lab replay --pattern 'BTCUSDT_*_2026-05-03.jsonl'
 
 The recorder is configured for all-day public-data collection without keeping every noisy tick forever:
 
-- `RECORD_DEPTH_STREAM=false` by default because the first strategy does not consume depth updates yet.
+- `RECORD_DEPTH_STREAM=false` by default because depth is useful live context but too noisy to store raw unless researching order-book behavior.
+- `CONSUME_DEPTH_STREAM=true` keeps top-5 depth features in memory even when raw depth storage is off.
+- `CONSUME_LIQUIDATION_STREAM=true` records forced-order/liquidation pulses for context.
+- `OPEN_INTEREST_POLL_SECONDS=30` refreshes open interest outside the hot decision path.
 - `RECORD_BOOK_TICKER_MIN_INTERVAL_MS=250` stores bookTicker at most four times per second.
 - `RAW_ROTATION_MINUTES=60` writes hourly raw files.
 - `COMPRESS_ROTATED_RAW=true` gzips completed hourly raw files.
@@ -186,7 +314,7 @@ data/paper_trades/  closed paper trades
 Tomorrow's recon command:
 
 ```bash
-futures-lab record --seconds 28800 --quiet
+docker compose run --rm api futures-lab record --seconds 28800 --quiet
 ```
 
 That is an 8-hour run.

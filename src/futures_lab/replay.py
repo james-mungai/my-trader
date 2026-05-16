@@ -1,15 +1,18 @@
+import gzip
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator, TextIO
 
 from futures_lab.audit import AuditLog
 from futures_lab.config import Settings
 from futures_lab.market_state import MarketStateBook
-from futures_lab.models import DecisionAction, PaperTrade
+from futures_lab.models import DecisionAction, MarketState, PaperPosition, PaperTrade, Side
 from futures_lab.paper import PaperBroker
 from futures_lab.risk import RiskEngine
+from futures_lab.shadow import ShadowTradeTracker
 from futures_lab.strategy import HitAndRunStrategy
 
 
@@ -17,6 +20,92 @@ from futures_lab.strategy import HitAndRunStrategy
 class ReplayMessage:
     received_at: datetime
     payload: dict
+
+
+@dataclass
+class ReplayPositionStats:
+    symbol: str
+    side: str
+    mode: str
+    entry_price: float
+    opened_at: datetime
+    status: str
+    last_price: float | None = None
+    last_seen_at: datetime | None = None
+    closed_at: datetime | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None
+    unrealized_pnl_usd: float = 0.0
+    net_unrealized_pnl_usd: float = 0.0
+    max_favorable_move_pct: float = 0.0
+    max_adverse_move_pct: float = 0.0
+    max_favorable_pnl_usd: float = 0.0
+    max_adverse_pnl_usd: float = 0.0
+    taker_fee_bps: float = 4.0
+
+    @classmethod
+    def from_position(cls, position: PaperPosition, settings: Settings) -> "ReplayPositionStats":
+        return cls(
+            symbol=position.symbol,
+            side=position.side.value,
+            mode=position.mode.value,
+            entry_price=position.entry_price,
+            opened_at=position.opened_at,
+            status="open",
+            taker_fee_bps=settings.taker_fee_bps,
+        )
+
+    @property
+    def time_in_trade_seconds(self) -> float | None:
+        end = self.closed_at or self.last_seen_at
+        if end is None:
+            return None
+        return (end - self.opened_at).total_seconds()
+
+    def update(self, position: PaperPosition, market: MarketState) -> None:
+        if market.mid_price is None:
+            return
+        self.last_price = market.mid_price
+        self.last_seen_at = market.last_received_at
+        gross = _gross_pnl(position, market.mid_price)
+        net = gross - _round_trip_fees(position, self.taker_fee_bps)
+        move = _underlying_move_pct(position, market.mid_price)
+        self.unrealized_pnl_usd = gross
+        self.net_unrealized_pnl_usd = net
+        self.max_favorable_pnl_usd = max(self.max_favorable_pnl_usd, gross)
+        self.max_adverse_pnl_usd = min(self.max_adverse_pnl_usd, gross)
+        self.max_favorable_move_pct = max(self.max_favorable_move_pct, move)
+        self.max_adverse_move_pct = min(self.max_adverse_move_pct, move)
+
+    def close(self, trade: PaperTrade, status: str = "closed") -> None:
+        self.status = status
+        self.closed_at = trade.closed_at
+        self.exit_price = trade.exit_price
+        self.exit_reason = trade.exit_reason
+        self.unrealized_pnl_usd = trade.gross_pnl_usd
+        self.net_unrealized_pnl_usd = trade.net_pnl_usd
+
+    def model_dump(self) -> dict:
+        return {
+            "symbol": self.symbol,
+            "side": self.side,
+            "mode": self.mode,
+            "entry_price": self.entry_price,
+            "opened_at": self.opened_at,
+            "status": self.status,
+            "last_price": self.last_price,
+            "last_seen_at": self.last_seen_at,
+            "closed_at": self.closed_at,
+            "exit_price": self.exit_price,
+            "exit_reason": self.exit_reason,
+            "time_in_trade_seconds": self.time_in_trade_seconds,
+            "unrealized_pnl_usd": self.unrealized_pnl_usd,
+            "net_unrealized_pnl_usd": self.net_unrealized_pnl_usd,
+            "max_favorable_move_pct": self.max_favorable_move_pct,
+            "max_adverse_move_pct": self.max_adverse_move_pct,
+            "max_favorable_pnl_usd": self.max_favorable_pnl_usd,
+            "max_adverse_pnl_usd": self.max_adverse_pnl_usd,
+        }
 
 
 @dataclass
@@ -30,6 +119,15 @@ class ReplaySummary:
     paper_closes: int = 0
     net_pnl_usd: float = 0.0
     trades: list[PaperTrade] = field(default_factory=list)
+    position_stats: list[ReplayPositionStats] = field(default_factory=list)
+    open_position: ReplayPositionStats | None = None
+    unrealized_pnl_usd: float = 0.0
+    net_unrealized_pnl_usd: float = 0.0
+    markov: dict = field(default_factory=dict)
+    shadow_opens: int = 0
+    shadow_closes: int = 0
+    shadow_net_pnl_usd: float = 0.0
+    shadow_events: list[dict] = field(default_factory=list)
 
     @property
     def wins(self) -> int:
@@ -59,13 +157,52 @@ class ReplaySummary:
             "losses": self.losses,
             "win_rate": self.win_rate,
             "trades": [trade.model_dump() for trade in self.trades],
+            "position_stats": [stats.model_dump() for stats in self.position_stats],
+            "open_position": self.open_position.model_dump() if self.open_position else None,
+            "unrealized_pnl_usd": self.unrealized_pnl_usd,
+            "net_unrealized_pnl_usd": self.net_unrealized_pnl_usd,
+            "markov": self.markov,
+            "shadow_opens": self.shadow_opens,
+            "shadow_closes": self.shadow_closes,
+            "shadow_net_pnl_usd": self.shadow_net_pnl_usd,
+            "shadow_events": self.shadow_events,
         }
+
+
+def _gross_pnl(position: PaperPosition, exit_price: float) -> float:
+    direction = 1 if position.side == Side.long else -1
+    return (exit_price - position.entry_price) * position.quantity * direction
+
+
+def _round_trip_fees(position: PaperPosition, taker_fee_bps: float) -> float:
+    return position.notional_usd * 2 * (taker_fee_bps / 10_000)
+
+
+def _underlying_move_pct(position: PaperPosition, price: float) -> float:
+    direction = 1 if position.side == Side.long else -1
+    return ((price - position.entry_price) / position.entry_price) * direction
 
 
 def discover_raw_files(settings: Settings, pattern: str | None = None) -> list[Path]:
     raw_dir = Path(settings.data_dir) / "raw_ws"
-    glob_pattern = pattern or f"{settings.symbol.upper()}_*_*.jsonl"
-    return sorted(raw_dir.glob(glob_pattern))
+    if pattern is not None:
+        return sorted(raw_dir.glob(pattern))
+    return sorted(
+        [
+            *raw_dir.glob(f"{settings.symbol.upper()}_*_*.jsonl"),
+            *raw_dir.glob(f"{settings.symbol.upper()}_*_*.jsonl.gz"),
+        ]
+    )
+
+
+@contextmanager
+def _open_text(path: Path) -> Iterator[TextIO]:
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            yield handle
+        return
+    with path.open("r", encoding="utf-8") as handle:
+        yield handle
 
 
 def load_messages(
@@ -76,7 +213,7 @@ def load_messages(
     messages: list[ReplayMessage] = []
     last_book_ticker_at: datetime | None = None
     for path in paths:
-        with path.open("r", encoding="utf-8") as handle:
+        with _open_text(path) as handle:
             for line in handle:
                 if not line.strip():
                     continue
@@ -103,6 +240,7 @@ def replay_files(
     decision_interval_ms: int | None = None,
     include_depth: bool = False,
     book_ticker_min_interval_ms: int = 100,
+    flatten_at_end: bool = False,
     audit: AuditLog | None = None,
 ) -> ReplaySummary:
     path_list = [Path(path) for path in paths]
@@ -111,9 +249,13 @@ def replay_files(
     strategy = HitAndRunStrategy(settings)
     risk = RiskEngine(settings)
     paper = PaperBroker(settings)
+    shadow = ShadowTradeTracker(settings)
     summary = ReplaySummary(files=[str(path) for path in path_list])
     interval_ms = decision_interval_ms if decision_interval_ms is not None else settings.decision_interval_ms
     last_sample_at: datetime | None = None
+    active_stats: ReplayPositionStats | None = None
+    last_market: MarketState | None = None
+    last_message_at: datetime | None = None
 
     for message in load_messages(
         path_list,
@@ -121,6 +263,7 @@ def replay_files(
         book_ticker_min_interval_ms=book_ticker_min_interval_ms,
     ):
         summary.messages += 1
+        last_message_at = message.received_at
         state_book.ingest(message.payload, received_at=message.received_at)
 
         should_sample = last_sample_at is None
@@ -132,10 +275,22 @@ def replay_files(
 
         last_sample_at = message.received_at
         market = state_book.snapshot(current=message.received_at)
+        last_market = market
+        if paper.open_position is not None and active_stats is not None:
+            active_stats.update(paper.open_position, market)
+
         closed = paper.mark(market, timestamp=message.received_at)
         if closed is not None:
             summary.paper_closes += 1
             summary.trades.append(closed)
+            if active_stats is not None:
+                active_stats.close(closed)
+                summary.position_stats.append(active_stats)
+                active_stats = None
+        for event in shadow.mark(market, timestamp=message.received_at):
+            summary.shadow_closes += 1
+            summary.shadow_net_pnl_usd += float(event.get("net_pnl_usd") or 0.0)
+            summary.shadow_events.append(event)
 
         decision = strategy.decide(market)
         verdict = risk.evaluate(decision, market, paper.state())
@@ -147,8 +302,40 @@ def replay_files(
             opened = paper.open_from_decision(decision, opened_at=message.received_at)
             if opened is not None:
                 summary.paper_opens += 1
+                active_stats = ReplayPositionStats.from_position(opened, settings)
+                active_stats.update(opened, market)
+        shadow_opened = shadow.open_from_decision(decision, opened_at=message.received_at)
+        if shadow_opened is not None:
+            summary.shadow_opens += 1
+            summary.shadow_events.append(shadow_opened)
+
+    if flatten_at_end and paper.open_position is not None and last_market is not None and last_market.mid_price is not None:
+        if active_stats is not None:
+            active_stats.update(paper.open_position, last_market)
+        closed = paper.close(last_market.mid_price, "session_end", closed_at=last_message_at)
+        summary.paper_closes += 1
+        summary.trades.append(closed)
+        if active_stats is not None:
+            active_stats.close(closed, status="flattened")
+            summary.position_stats.append(active_stats)
+            active_stats = None
+
+    if flatten_at_end and last_market is not None and last_market.mid_price is not None:
+        for event in shadow.close_all(last_market, reason="session_end", timestamp=last_message_at):
+            summary.shadow_closes += 1
+            summary.shadow_net_pnl_usd += float(event.get("net_pnl_usd") or 0.0)
+            summary.shadow_events.append(event)
+
+    if active_stats is not None and paper.open_position is not None:
+        if last_market is not None:
+            active_stats.update(paper.open_position, last_market)
+        summary.open_position = active_stats
+        summary.unrealized_pnl_usd = active_stats.unrealized_pnl_usd
+        summary.net_unrealized_pnl_usd = active_stats.net_unrealized_pnl_usd
 
     summary.net_pnl_usd = paper.state().realized_pnl_usd
+    if hasattr(strategy, "sequence_summary"):
+        summary.markov = strategy.sequence_summary()
     if audit is not None:
         audit.write("replay_complete", summary.model_dump())
     return summary

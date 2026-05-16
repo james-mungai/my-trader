@@ -43,13 +43,19 @@ Binance public WebSockets
 
 The repo is patched for all-day recon:
 
-- `RECORD_DEPTH_STREAM=false` by default because current strategy does not consume depth updates.
+- `CONSUME_DEPTH_STREAM=true` by default keeps top-5 depth features live.
+- `RECORD_DEPTH_STREAM=false` by default because raw depth storage is noisy and only needed for targeted order-book replay research.
+- `CONSUME_LIQUIDATION_STREAM=true` by default keeps forced-order/liquidation context live.
+- `OPEN_INTEREST_POLL_SECONDS=30` refreshes open-interest context outside the hot decision path.
 - `RECORD_BOOK_TICKER_MIN_INTERVAL_MS=250` down-samples raw bookTicker storage.
 - `RAW_ROTATION_MINUTES=60` writes hourly raw files.
 - `COMPRESS_ROTATED_RAW=true` compresses completed raw files.
 - `WRITE_FEATURE_LOG=true` writes compact feature snapshots.
 - `WRITE_DECISION_LOG=true` writes strategy/risk decisions.
 - `WRITE_PAPER_TRADE_LOG=true` writes closed paper trades.
+- `ENABLE_FAST_FAILURE_EXIT=false` by default because recent replay showed early fast-failure exits can cut valid winners before TP.
+- `ENABLE_MARKOV_STATE_MACHINE=true` logs deterministic finite-state/Markov sequence state in decisions and replay summaries.
+- `STRATEGY_VARIANT=stateful_momentum` enables the hybrid FSM gate: impulse -> pullback/bounce -> reclaim/rejection -> continuation confirmation, with a fast-target feasibility check. Confirmed-but-blocked near-misses are logged in decision evidence as `stateful_momentum_filter`.
 
 Important output locations:
 
@@ -62,11 +68,26 @@ data/paper_trades/  closed paper-trade JSONL, ignored by Git
 
 ## Development Commands
 
-Use Python 3.11+.
+Prefer Docker for OS-agnostic local work:
 
 ```bash
-cd /Users/jamesmungai/myprojects/futures-lab
-source .venv/bin/activate
+cp .env.example .env
+docker compose up --build
+docker compose run --rm api pytest -q
+docker compose run --rm api futures-lab watch --seconds 30
+docker compose run --rm api futures-lab record --seconds 28800 --quiet
+docker compose run --rm api futures-lab replay --flatten-at-end
+docker compose run --rm api futures-lab data-summary
+docker compose run --rm api futures-lab compress-raw --all
+```
+
+Local Python is still supported when needed. Use Python 3.11+ from the repository root.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # macOS/Linux
+.\.venv\Scripts\Activate.ps1  # Windows PowerShell
+python -m pip install -e ".[dev]"
 pytest -q
 uvicorn futures_lab.api:app --reload --host 127.0.0.1 --port 8090
 futures-lab watch --seconds 30
@@ -75,13 +96,13 @@ futures-lab watch --seconds 30
 Serious recon run:
 
 ```bash
-futures-lab record --seconds 28800 --quiet
+docker compose run --rm api futures-lab record --seconds 28800 --quiet
 ```
 
 Replay latest captured raw data:
 
 ```bash
-futures-lab replay
+docker compose run --rm api futures-lab replay --flatten-at-end
 ```
 
 Local dashboard:
@@ -90,15 +111,21 @@ Local dashboard:
 http://127.0.0.1:8090/
 ```
 
-If `.venv` is absent:
+## Cloud Deployment
 
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+AWS deployment scaffolding is available:
+
+```text
+Dockerfile.aws
+docker-compose.aws.yml
+deployments/aws/
+scripts/aws/
+docs/cloud_deployment.md
 ```
 
-On this machine, Python 3.13 was available at `/opt/homebrew/bin/python3.13`.
+Use Lightsail Containers in Tokyo (`ap-northeast-1`) as the first cloud API/paper-monitoring target.
+Use a Lightsail/EC2 VM with `docker-compose.aws.yml` when durable recon data and easier file retrieval
+matter more than managed container convenience.
 
 ## Current Local Checkpoint
 
