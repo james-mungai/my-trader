@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 import json
-import time
+from datetime import datetime, timedelta, timezone
 
 from futures_lab.audit import AuditLog
 from futures_lab.config import Settings
@@ -10,14 +10,24 @@ from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.runtime import TradingRuntime
 
 
+def _record_deadline(seconds: int, *, current: datetime | None = None) -> datetime:
+    now = current or datetime.now(timezone.utc)
+    return now + timedelta(seconds=max(0, seconds))
+
+
+def _deadline_remaining_seconds(deadline: datetime, *, current: datetime | None = None) -> float:
+    now = current or datetime.now(timezone.utc)
+    return (deadline - now).total_seconds()
+
+
 async def watch(seconds: int, quiet: bool = False) -> None:
     settings = Settings()
     runtime = TradingRuntime.create(settings)
     runtime.start()
     try:
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            await asyncio.sleep(1)
+        deadline = _record_deadline(seconds)
+        while (remaining := _deadline_remaining_seconds(deadline)) > 0:
+            await asyncio.sleep(min(1, remaining))
             market, decision, risk = runtime.decide_once()
             if not quiet:
                 print(
