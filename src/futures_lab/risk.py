@@ -33,6 +33,14 @@ class RiskEngine:
             blockers.append("market data stale")
         if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:
             blockers.append("spread too wide")
+        if decision.target_move_pct is not None:
+            round_trip_fee_pct = 2 * (self.settings.taker_fee_bps / 10_000)
+            required_target_pct = round_trip_fee_pct * self.settings.min_gross_target_fee_multiple
+            if decision.target_move_pct < required_target_pct:
+                blockers.append(
+                    "target does not clear fees: "
+                    f"{decision.target_move_pct:.4%} < {required_target_pct:.4%}"
+                )
         if decision.stop_move_pct is not None and decision.leverage is not None:
             leveraged_stop_loss = decision.stop_move_pct * decision.leverage
             if leveraged_stop_loss > 0.60:

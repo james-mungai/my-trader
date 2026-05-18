@@ -70,9 +70,21 @@ def test_paper_fast_trade_hits_target_after_fees():
 
     assert trade is not None
     assert trade.exit_reason == "take_profit"
-    assert trade.gross_pnl_usd == pytest.approx(150.0)
-    assert trade.net_pnl_usd < 150.0
+    assert trade.gross_pnl_usd == pytest.approx(position.notional_usd * (decision.target_move_pct or 0.0))
+    assert trade.net_pnl_usd < trade.gross_pnl_usd
     assert broker.state().trades_today == 1
+
+
+def test_risk_blocks_target_that_does_not_clear_round_trip_fees():
+    settings = Settings(MIN_CONFIDENCE=0.70, FAST_TARGET_MOVE_PCT=0.001, MIN_GROSS_TARGET_FEE_MULTIPLE=2.0)
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+
+    verdict = RiskEngine(settings).evaluate(decision, market, broker.state())
+
+    assert not verdict.allowed
+    assert "target does not clear fees" in " ".join(verdict.blockers)
 
 
 def test_risk_blocks_after_daily_target_hit():

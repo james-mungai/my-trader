@@ -46,9 +46,9 @@ class Settings(BaseSettings):
     session_bias_side: str = Field(default="neutral", alias="SESSION_BIAS_SIDE")
     session_bias_strength: float = Field(default=0.0, alias="SESSION_BIAS_STRENGTH")
     session_bias_reason: str = Field(default="", alias="SESSION_BIAS_REASON")
-    fast_target_move_pct: float = Field(default=0.005, alias="FAST_TARGET_MOVE_PCT")
-    fast_stop_move_pct: float = Field(default=0.002, alias="FAST_STOP_MOVE_PCT")
-    slow_target_move_pct: float = Field(default=0.008, alias="SLOW_TARGET_MOVE_PCT")
+    fast_target_move_pct: float = Field(default=0.002, alias="FAST_TARGET_MOVE_PCT")
+    fast_stop_move_pct: float = Field(default=0.0015, alias="FAST_STOP_MOVE_PCT")
+    slow_target_move_pct: float = Field(default=0.0035, alias="SLOW_TARGET_MOVE_PCT")
     slow_stop_move_pct: float = Field(default=0.0035, alias="SLOW_STOP_MOVE_PCT")
     stateful_target_feasibility_fraction: float = Field(default=0.60, alias="STATEFUL_TARGET_FEASIBILITY_FRACTION")
     stateful_adaptive_target_fraction: float = Field(default=0.50, alias="STATEFUL_ADAPTIVE_TARGET_FRACTION")
@@ -56,8 +56,21 @@ class Settings(BaseSettings):
     stateful_adaptive_min_score: float = Field(default=0.70, alias="STATEFUL_ADAPTIVE_MIN_SCORE")
     stateful_adaptive_min_quality_long: float = Field(default=0.74, alias="STATEFUL_ADAPTIVE_MIN_QUALITY_LONG")
     stateful_adaptive_min_quality_short: float = Field(default=0.68, alias="STATEFUL_ADAPTIVE_MIN_QUALITY_SHORT")
-    stateful_adaptive_target_move_pct: float = Field(default=0.0035, alias="STATEFUL_ADAPTIVE_TARGET_MOVE_PCT")
-    stateful_adaptive_stop_move_pct: float = Field(default=0.0020, alias="STATEFUL_ADAPTIVE_STOP_MOVE_PCT")
+    stateful_adaptive_target_move_pct: float = Field(default=0.0020, alias="STATEFUL_ADAPTIVE_TARGET_MOVE_PCT")
+    stateful_adaptive_stop_move_pct: float = Field(default=0.0015, alias="STATEFUL_ADAPTIVE_STOP_MOVE_PCT")
+    higher_timeframe_execution_gate_enabled: bool = Field(default=True, alias="HIGHER_TIMEFRAME_EXECUTION_GATE_ENABLED")
+    higher_timeframe_gate_min_strength: float = Field(default=0.35, alias="HIGHER_TIMEFRAME_GATE_MIN_STRENGTH")
+    higher_timeframe_countertrend_min_quality: float = Field(default=0.86, alias="HIGHER_TIMEFRAME_COUNTERTREND_MIN_QUALITY")
+    higher_timeframe_countertrend_min_score: float = Field(default=0.82, alias="HIGHER_TIMEFRAME_COUNTERTREND_MIN_SCORE")
+    higher_timeframe_countertrend_min_sequence_confidence: float = Field(
+        default=0.96,
+        alias="HIGHER_TIMEFRAME_COUNTERTREND_MIN_SEQUENCE_CONFIDENCE",
+    )
+    higher_timeframe_exception_target_move_pct: float = Field(default=0.0035, alias="HIGHER_TIMEFRAME_EXCEPTION_TARGET_MOVE_PCT")
+    higher_timeframe_strong_exception_target_move_pct: float = Field(
+        default=0.0050,
+        alias="HIGHER_TIMEFRAME_STRONG_EXCEPTION_TARGET_MOVE_PCT",
+    )
     regime_outcome_horizons_seconds: str = Field(default="15,30,60,180,300,900", alias="REGIME_OUTCOME_HORIZONS_SECONDS")
     regime_outcome_target_moves_pct: str = Field(default="0.001,0.002,0.0035,0.005", alias="REGIME_OUTCOME_TARGET_MOVES_PCT")
     regime_outcome_stop_moves_pct: str = Field(default="0.001,0.002", alias="REGIME_OUTCOME_STOP_MOVES_PCT")
@@ -80,6 +93,7 @@ class Settings(BaseSettings):
     fast_leverage: int = Field(default=200, alias="FAST_LEVERAGE")
     slow_leverage: int = Field(default=80, alias="SLOW_LEVERAGE")
     taker_fee_bps: float = Field(default=4.0, alias="TAKER_FEE_BPS")
+    min_gross_target_fee_multiple: float = Field(default=2.0, alias="MIN_GROSS_TARGET_FEE_MULTIPLE")
     daily_target_usd: float = Field(default=150.0, alias="DAILY_TARGET_USD")
     daily_max_loss_usd: float = Field(default=75.0, alias="DAILY_MAX_LOSS_USD")
     max_trades_per_day: int = Field(default=1, alias="MAX_TRADES_PER_DAY")

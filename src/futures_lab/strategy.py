@@ -172,6 +172,14 @@ class HitAndRunStrategy:
         min_score = self.settings.stateful_adaptive_min_score if adaptive_entry_allowed else self.settings.min_confidence
         required_score = max(min_score, opposing_score + 0.04)
         target_feasible = self._target_move_feasible(market)
+        higher_timeframe_gate = self._higher_timeframe_execution_gate(
+            side=side,
+            snapshot=snapshot,
+            market=market,
+            score=score,
+            adaptive_gate=adaptive_gate,
+            target_feasible=target_feasible,
+        )
         blockers = []
         if not target_feasible and not adaptive_entry_allowed:
             blockers.append("target_feasibility")
@@ -179,6 +187,8 @@ class HitAndRunStrategy:
             blockers.append("min_confidence")
         if score < opposing_score + 0.04:
             blockers.append("side_separation")
+        if not higher_timeframe_gate["allowed"]:
+            blockers.append(higher_timeframe_gate["blocker"])
 
         row = {
             "confirmed": True,
@@ -194,10 +204,11 @@ class HitAndRunStrategy:
             "target_feasible": target_feasible,
             "adaptive_entry_allowed": adaptive_entry_allowed,
             "adaptive_gate": adaptive_gate,
+            "higher_timeframe_gate": higher_timeframe_gate,
             "range_180s_pct": market.range_180s_pct,
             "min_required_range_180s_pct": self._min_target_feasible_range_pct(),
             "min_adaptive_range_180s_pct": self._min_adaptive_range_pct(),
-            "target_move_pct": self.settings.fast_target_move_pct,
+            "target_move_pct": higher_timeframe_gate["target_move_pct"],
             "sequence_confidence": snapshot.confidence,
             "path": [state.value for state in snapshot.path],
         }
@@ -215,6 +226,12 @@ class HitAndRunStrategy:
                 "stateful momentum confirmed but adaptive target feasibility blocked: "
                 f"range_180s_pct={stateful_filter['range_180s_pct']} "
                 f"< required={stateful_filter['min_required_range_180s_pct']}"
+            )
+        if "higher_timeframe_countertrend" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("higher_timeframe_gate") or {}
+            return (
+                "stateful momentum confirmed but higher-timeframe gate blocked countertrend trade: "
+                f"bias={gate.get('bias_side')} strength={gate.get('bias_strength')}"
             )
         return (
             "stateful momentum confirmed but score blocked: "
@@ -745,17 +762,85 @@ class HitAndRunStrategy:
 
     def _weighted_quality_score(self, components: dict[str, float]) -> float:
         score = (
-            0.18 * components["strategy_score"]
-            + 0.18 * components["sequence_confidence"]
-            + 0.12 * components["range_expansion"]
-            + 0.14 * components["flow_10s_alignment"]
-            + 0.10 * components["flow_30s_alignment"]
-            + 0.10 * components["pressure_alignment"]
-            + 0.10 * components["trend_alignment"]
-            + 0.05 * components["impulse_alignment"]
+            0.16 * components["strategy_score"]
+            + 0.16 * components["sequence_confidence"]
+            + 0.11 * components["range_expansion"]
+            + 0.13 * components["flow_10s_alignment"]
+            + 0.09 * components["flow_30s_alignment"]
+            + 0.09 * components["pressure_alignment"]
+            + 0.09 * components["trend_alignment"]
+            + 0.04 * components["impulse_alignment"]
+            + 0.10 * components["higher_timeframe_alignment"]
             + 0.03 * components["fresh_data"]
         )
         return round(self._clamp(score), 4)
+
+    def _higher_timeframe_execution_gate(
+        self,
+        side: str,
+        snapshot: MarketRegimeSnapshot,
+        market: MarketState,
+        score: float,
+        adaptive_gate: dict,
+        target_feasible: bool,
+    ) -> dict:
+        quality_score = float(adaptive_gate.get("quality_score") or 0.0)
+        base = {
+            "enabled": self.settings.higher_timeframe_execution_gate_enabled,
+            "allowed": True,
+            "blocker": None,
+            "bias_side": market.higher_timeframe_bias_side,
+            "bias_strength": self._clamp(market.higher_timeframe_bias_strength),
+            "bias_reason": market.higher_timeframe_bias_reason,
+            "context_stale": self._higher_timeframe_context_stale(market),
+            "quality_score": quality_score,
+            "target_move_pct": self.settings.fast_target_move_pct,
+            "stop_move_pct": self.settings.fast_stop_move_pct,
+            "profile": "fast",
+            "exception_allowed": False,
+        }
+        if not self.settings.higher_timeframe_execution_gate_enabled:
+            return base
+        if base["context_stale"]:
+            return base | {"profile": "no_htf_context"}
+        bias_side = market.higher_timeframe_bias_side
+        strength = self._clamp(market.higher_timeframe_bias_strength)
+        if bias_side not in {"long", "short"} or strength < self.settings.higher_timeframe_gate_min_strength:
+            return base | {"profile": "weak_or_neutral_htf"}
+        if bias_side == side:
+            return base | {
+                "profile": "htf_aligned_fast",
+                "target_move_pct": self.settings.fast_target_move_pct,
+                "stop_move_pct": self.settings.fast_stop_move_pct,
+            }
+
+        exception_allowed = (
+            target_feasible
+            and quality_score >= self.settings.higher_timeframe_countertrend_min_quality
+            and score >= self.settings.higher_timeframe_countertrend_min_score
+            and snapshot.confidence >= self.settings.higher_timeframe_countertrend_min_sequence_confidence
+            and adaptive_gate.get("strong_structure")
+            and adaptive_gate.get("flow_agrees")
+        )
+        if not exception_allowed:
+            return base | {
+                "allowed": False,
+                "blocker": "higher_timeframe_countertrend",
+                "profile": "countertrend_shadow_only",
+                "required_quality": self.settings.higher_timeframe_countertrend_min_quality,
+                "required_score": self.settings.higher_timeframe_countertrend_min_score,
+                "required_sequence_confidence": self.settings.higher_timeframe_countertrend_min_sequence_confidence,
+            }
+
+        target = self.settings.higher_timeframe_exception_target_move_pct
+        if quality_score >= 0.92 and score >= 0.90:
+            target = self.settings.higher_timeframe_strong_exception_target_move_pct
+        return base | {
+            "profile": "countertrend_exception",
+            "exception_allowed": True,
+            "target_move_pct": target,
+            "stop_move_pct": self.settings.slow_stop_move_pct,
+        }
 
     def _required_score(self, side: str, opposing_score: float, stateful_filter: dict | None) -> float:
         min_score = self.settings.min_confidence
@@ -768,6 +853,19 @@ class HitAndRunStrategy:
         return max(min_score, opposing_score + 0.04)
 
     def _trade_profile(self, mode: TradeMode, stateful_filter: dict | None, side: str) -> TradeProfile:
+        higher_timeframe_gate = (stateful_filter or {}).get("higher_timeframe_gate") or {}
+        if (
+            stateful_filter is not None
+            and stateful_filter.get("side") == side
+            and higher_timeframe_gate.get("profile") == "countertrend_exception"
+        ):
+            return TradeProfile(
+                name="countertrend_exception",
+                mode=TradeMode.slow,
+                target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
+                stop_move_pct=float(higher_timeframe_gate["stop_move_pct"]),
+                leverage=self.settings.slow_leverage,
+            )
         if (
             stateful_filter is not None
             and stateful_filter.get("side") == side
@@ -780,6 +878,18 @@ class HitAndRunStrategy:
                 target_move_pct=self.settings.stateful_adaptive_target_move_pct,
                 stop_move_pct=self.settings.stateful_adaptive_stop_move_pct,
                 leverage=self.settings.slow_leverage,
+            )
+        if (
+            stateful_filter is not None
+            and stateful_filter.get("side") == side
+            and higher_timeframe_gate.get("profile") == "htf_aligned_fast"
+        ):
+            return TradeProfile(
+                name="htf_aligned_fast",
+                mode=TradeMode.fast,
+                target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
+                stop_move_pct=float(higher_timeframe_gate["stop_move_pct"]),
+                leverage=self.settings.fast_leverage,
             )
         if mode == TradeMode.fast:
             return TradeProfile(

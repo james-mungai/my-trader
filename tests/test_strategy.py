@@ -274,10 +274,78 @@ def test_stateful_momentum_accepts_confirmed_short_breakdown_location():
     assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is True
 
 
+def test_stateful_momentum_uses_higher_timeframe_aligned_fast_profile():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        range_position_180s=0.08,
+        return_15s_pct=-0.00025,
+        return_60s_pct=-0.0009,
+        return_180s_pct=-0.0026,
+        taker_buy_ratio_10s=0.26,
+        taker_buy_ratio_30s=0.35,
+        book_imbalance_top=-0.25,
+        depth_imbalance_top5=-0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={"bias": {"side": "short", "strength": 0.55, "reason": "1h/4h downtrend"}},
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.55,
+        higher_timeframe_bias_reason="1h/4h downtrend",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00032, "taker_buy_ratio_10s": 0.30}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00034, "taker_buy_ratio_10s": 0.28}))
+
+    assert confirmed.action == DecisionAction.propose_short
+    assert confirmed.target_move_pct == 0.002
+    assert confirmed.stop_move_pct == 0.0015
+    assert confirmed.evidence["trade_profile"] == "htf_aligned_fast"
+    assert confirmed.evidence["stateful_momentum_filter"]["higher_timeframe_gate"]["profile"] == "htf_aligned_fast"
+
+
+def test_stateful_momentum_blocks_counter_higher_timeframe_trade_unless_exceptional():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            HIGHER_TIMEFRAME_COUNTERTREND_MIN_QUALITY=0.99,
+        )
+    )
+    impulse = _market(
+        range_position_180s=0.97,
+        return_15s_pct=0.00025,
+        return_60s_pct=0.0009,
+        return_180s_pct=0.0026,
+        taker_buy_ratio_10s=0.74,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.25,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={"bias": {"side": "short", "strength": 0.65, "reason": "1h/4h downtrend"}},
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.65,
+        higher_timeframe_bias_reason="1h/4h downtrend",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00032, "taker_buy_ratio_10s": 0.70}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.72}))
+
+    assert confirmed.action == DecisionAction.wait
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert "higher_timeframe_countertrend" in stateful_filter["blockers"]
+    assert stateful_filter["higher_timeframe_gate"]["profile"] == "countertrend_shadow_only"
+    assert "shadow_trade" in stateful_filter
+
+
 def test_stateful_momentum_blocks_breakout_when_recent_range_cannot_support_target():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
     impulse = _market(
-        range_180s_pct=0.002,
+        range_180s_pct=0.0008,
         range_position_180s=0.02,
         return_15s_pct=-0.00025,
         return_60s_pct=-0.0009,
@@ -302,8 +370,8 @@ def test_stateful_momentum_blocks_breakout_when_recent_range_cannot_support_targ
     assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is False
     assert confirmed.evidence["stateful_momentum_filter"]["adaptive_entry_allowed"] is False
     assert "shadow_trade" in confirmed.evidence["stateful_momentum_filter"]
-    assert confirmed.evidence["stateful_momentum_filter"]["range_180s_pct"] == 0.002
-    assert confirmed.evidence["stateful_momentum_filter"]["min_required_range_180s_pct"] == 0.003
+    assert confirmed.evidence["stateful_momentum_filter"]["range_180s_pct"] == 0.0008
+    assert confirmed.evidence["stateful_momentum_filter"]["min_required_range_180s_pct"] == 0.0012
 
 
 def test_stateful_momentum_adaptive_gate_allows_high_confidence_low_range_long():
@@ -316,7 +384,7 @@ def test_stateful_momentum_adaptive_gate_allows_high_confidence_low_range_long()
         )
     )
     impulse = _market(
-        range_180s_pct=0.0026,
+        range_180s_pct=0.0011,
         range_position_180s=0.92,
         return_15s_pct=0.00032,
         return_60s_pct=0.001,
@@ -337,7 +405,7 @@ def test_stateful_momentum_adaptive_gate_allows_high_confidence_low_range_long()
     assert confirmed.mode is not None
     assert confirmed.mode.value == "slow"
     assert confirmed.leverage == 80
-    assert confirmed.target_move_pct == 0.0035
+    assert confirmed.target_move_pct == 0.002
     assert confirmed.evidence["trade_profile"] == "adaptive_low_range"
     assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is False
     assert confirmed.evidence["stateful_momentum_filter"]["adaptive_entry_allowed"] is True
