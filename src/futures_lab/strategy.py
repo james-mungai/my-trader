@@ -61,6 +61,7 @@ class HitAndRunStrategy:
             liquidation_bias=liquidation_bias,
         )
         long_score, short_score = self._apply_session_bias(long_score, short_score, evidence)
+        long_score, short_score = self._apply_higher_timeframe_context(long_score, short_score, market, evidence)
         stateful_filter = self._stateful_momentum_filter(variant, sequence_snapshot, market, long_score, short_score)
         if stateful_filter is not None:
             evidence["stateful_momentum_filter"] = stateful_filter
@@ -253,6 +254,44 @@ class HitAndRunStrategy:
         if side == "short" and strength > 0:
             return round(max(0.0, long_score - 0.01 * strength), 4), round(min(1.0, short_score + 0.02 * strength), 4)
         return long_score, short_score
+
+    def _apply_higher_timeframe_context(
+        self,
+        long_score: float,
+        short_score: float,
+        market: MarketState,
+        evidence: dict,
+    ) -> tuple[float, float]:
+        context_stale = self._higher_timeframe_context_stale(market)
+        side = market.higher_timeframe_bias_side
+        strength = self._clamp(market.higher_timeframe_bias_strength)
+        evidence["higher_timeframe_context"] = {
+            "bias_side": side,
+            "bias_strength": strength,
+            "bias_reason": market.higher_timeframe_bias_reason,
+            "age_seconds": market.higher_timeframe_context_age_seconds,
+            "stale": context_stale,
+            "timeframes": market.higher_timeframe_context.get("timeframes", {}),
+        }
+        if context_stale or side == "neutral" or strength <= 0:
+            return long_score, short_score
+        boost = self.settings.higher_timeframe_score_boost * strength
+        penalty = self.settings.higher_timeframe_score_penalty * strength
+        if side == "long":
+            return round(min(1.0, long_score + boost), 4), round(max(0.0, short_score - penalty), 4)
+        if side == "short":
+            return round(max(0.0, long_score - penalty), 4), round(min(1.0, short_score + boost), 4)
+        return long_score, short_score
+
+    def _higher_timeframe_context_stale(self, market: MarketState) -> bool:
+        if not self.settings.higher_timeframe_enabled:
+            return True
+        if not market.higher_timeframe_context:
+            return True
+        age = market.higher_timeframe_context_age_seconds
+        if age is None:
+            return True
+        return age > max(900, self.settings.higher_timeframe_poll_seconds * 3)
 
     def _short_blockers(self, market: MarketState) -> list[str]:
         blockers = []
@@ -679,6 +718,7 @@ class HitAndRunStrategy:
         r60 = market.return_60s_pct or 0.0
         impulse_component = self._clamp((r60 if side == "long" else -r60) / (self.settings.stateful_adaptive_target_move_pct * 0.60))
         freshness = 1.0 if (market.data_age_seconds or 0.0) <= self.settings.stale_after_seconds else 0.0
+        htf_alignment = self._higher_timeframe_alignment(side, market)
         return {
             "strategy_score": self._clamp(score),
             "sequence_confidence": self._clamp(snapshot.confidence),
@@ -688,8 +728,20 @@ class HitAndRunStrategy:
             "pressure_alignment": self._clamp(pressure_component),
             "trend_alignment": trend_component,
             "impulse_alignment": impulse_component,
+            "higher_timeframe_alignment": htf_alignment,
             "fresh_data": freshness,
         }
+
+    def _higher_timeframe_alignment(self, side: str, market: MarketState) -> float:
+        if self._higher_timeframe_context_stale(market):
+            return 0.5
+        bias_side = market.higher_timeframe_bias_side
+        strength = self._clamp(market.higher_timeframe_bias_strength)
+        if bias_side == "neutral":
+            return 0.5
+        if bias_side == side:
+            return 0.5 + 0.5 * strength
+        return 0.5 - 0.5 * strength
 
     def _weighted_quality_score(self, components: dict[str, float]) -> float:
         score = (

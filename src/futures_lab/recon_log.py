@@ -131,4 +131,9 @@ class ReconLogger:
             "exchange_event_lag_ms": market.exchange_event_lag_ms,
             "avg_event_lag_30s_ms": market.avg_event_lag_30s_ms,
             "max_event_lag_30s_ms": market.max_event_lag_30s_ms,
+            "higher_timeframe_context_age_seconds": market.higher_timeframe_context_age_seconds,
+            "higher_timeframe_bias_side": market.higher_timeframe_bias_side,
+            "higher_timeframe_bias_strength": market.higher_timeframe_bias_strength,
+            "higher_timeframe_bias_reason": market.higher_timeframe_bias_reason,
+            "higher_timeframe_context": market.higher_timeframe_context,
         }

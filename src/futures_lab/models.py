@@ -79,6 +79,11 @@ class MarketState(BaseModel):
     exchange_event_lag_ms: float | None = None
     avg_event_lag_30s_ms: float | None = None
     max_event_lag_30s_ms: float | None = None
+    higher_timeframe_context: dict[str, Any] = Field(default_factory=dict)
+    higher_timeframe_context_age_seconds: float | None = None
+    higher_timeframe_bias_side: str = "neutral"
+    higher_timeframe_bias_strength: float = 0.0
+    higher_timeframe_bias_reason: str = ""
     regime: Regime = Regime.unknown
 
 

@@ -64,6 +64,8 @@ class MarketStateBook:
     liquidations: deque[LiquidationPoint] = field(default_factory=deque)
     latencies: deque[LatencyPoint] = field(default_factory=deque)
     open_interest_points: deque[OpenInterestPoint] = field(default_factory=deque)
+    higher_timeframe_context: dict = field(default_factory=dict)
+    higher_timeframe_updated_at: datetime | None = None
     depth_bids: dict[float, float] = field(default_factory=dict)
     depth_asks: dict[float, float] = field(default_factory=dict)
     last_stream_event_type: str | None = None
@@ -136,6 +138,10 @@ class MarketStateBook:
         self.open_interest_points.append(OpenInterestPoint(ts=updated_at, value=value))
         self._trim(updated_at)
 
+    def set_higher_timeframe_context(self, context: dict, updated_at: datetime | None = None) -> None:
+        self.higher_timeframe_context = context
+        self.higher_timeframe_updated_at = updated_at or now_utc()
+
     @property
     def mid_price(self) -> float | None:
         if self.best_bid is not None and self.best_ask is not None:
@@ -206,6 +212,15 @@ class MarketStateBook:
             exchange_event_lag_ms=self.latencies[-1].lag_ms if self.latencies else None,
             avg_event_lag_30s_ms=self._latency_avg(current, 30),
             max_event_lag_30s_ms=self._latency_max(current, 30),
+            higher_timeframe_context=self.higher_timeframe_context,
+            higher_timeframe_context_age_seconds=(
+                (current - self.higher_timeframe_updated_at).total_seconds()
+                if self.higher_timeframe_updated_at is not None
+                else None
+            ),
+            higher_timeframe_bias_side=self._higher_timeframe_bias_side(),
+            higher_timeframe_bias_strength=self._higher_timeframe_bias_strength(),
+            higher_timeframe_bias_reason=self._higher_timeframe_bias_reason(),
         )
         state.regime = self._classify_regime(state)
         return state
@@ -394,3 +409,20 @@ class MarketStateBook:
         if abs_return > 0.004 and state.range_180s_pct > 0.006:
             return Regime.directional
         return Regime.sideways
+
+    def _higher_timeframe_bias_side(self) -> str:
+        bias = self.higher_timeframe_context.get("bias") if self.higher_timeframe_context else None
+        side = str((bias or {}).get("side") or "neutral").lower()
+        return side if side in {"long", "short", "neutral"} else "neutral"
+
+    def _higher_timeframe_bias_strength(self) -> float:
+        bias = self.higher_timeframe_context.get("bias") if self.higher_timeframe_context else None
+        strength = (bias or {}).get("strength", 0.0)
+        try:
+            return max(0.0, min(1.0, float(strength)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _higher_timeframe_bias_reason(self) -> str:
+        bias = self.higher_timeframe_context.get("bias") if self.higher_timeframe_context else None
+        return str((bias or {}).get("reason") or "")

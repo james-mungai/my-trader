@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     state_window_seconds: int = Field(default=900, alias="STATE_WINDOW_SECONDS")
     stale_after_seconds: float = Field(default=2.0, alias="STALE_AFTER_SECONDS")
     open_interest_poll_seconds: int = Field(default=30, alias="OPEN_INTEREST_POLL_SECONDS")
+    higher_timeframe_enabled: bool = Field(default=True, alias="HIGHER_TIMEFRAME_ENABLED")
+    higher_timeframe_intervals: str = Field(default="5m,1h,4h,1d,1w", alias="HIGHER_TIMEFRAME_INTERVALS")
+    higher_timeframe_poll_seconds: int = Field(default=300, alias="HIGHER_TIMEFRAME_POLL_SECONDS")
+    higher_timeframe_limit: int = Field(default=120, alias="HIGHER_TIMEFRAME_LIMIT")
+    higher_timeframe_min_closed_candles: int = Field(default=30, alias="HIGHER_TIMEFRAME_MIN_CLOSED_CANDLES")
+    higher_timeframe_score_boost: float = Field(default=0.04, alias="HIGHER_TIMEFRAME_SCORE_BOOST")
+    higher_timeframe_score_penalty: float = Field(default=0.02, alias="HIGHER_TIMEFRAME_SCORE_PENALTY")
 
     decision_interval_ms: int = Field(default=500, alias="DECISION_INTERVAL_MS")
     min_warmup_seconds: int = Field(default=180, alias="MIN_WARMUP_SECONDS")
