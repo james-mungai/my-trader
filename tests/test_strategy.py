@@ -305,6 +305,56 @@ def test_stateful_momentum_uses_higher_timeframe_aligned_fast_profile():
     assert confirmed.evidence["stateful_momentum_filter"]["higher_timeframe_gate"]["profile"] == "htf_aligned_fast"
 
 
+def test_stateful_momentum_blocks_htf_short_when_5m_is_still_bouncing():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        range_position_180s=0.08,
+        return_15s_pct=-0.00025,
+        return_60s_pct=-0.0009,
+        return_180s_pct=-0.0026,
+        taker_buy_ratio_10s=0.26,
+        taker_buy_ratio_30s=0.35,
+        book_imbalance_top=-0.25,
+        depth_imbalance_top5=-0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={
+            "bias": {"side": "short", "strength": 0.55, "reason": "1h/4h downtrend"},
+            "timeframes": {
+                "5m": {
+                    "structure": "uptrend_breakout",
+                    "trend_score": 0.72,
+                    "range_position": 0.82,
+                    "taker_buy_ratio": 0.52,
+                }
+            },
+        },
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.55,
+        higher_timeframe_bias_reason="1h/4h downtrend",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00032, "taker_buy_ratio_10s": 0.30}))
+    confirmed = strategy.decide(
+        impulse.model_copy(
+            update={
+                "return_15s_pct": -0.00034,
+                "return_60s_pct": -0.0002,
+                "taker_buy_ratio_10s": 0.28,
+            }
+        )
+    )
+
+    assert confirmed.action == DecisionAction.wait
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert "local_execution_countertrend" in stateful_filter["blockers"]
+    assert stateful_filter["local_execution_gate"]["structure_5m"] == "uptrend_breakout"
+    assert stateful_filter["local_execution_gate"]["allowed"] is False
+    assert "shadow_trade" in stateful_filter
+
+
 def test_stateful_momentum_blocks_counter_higher_timeframe_trade_unless_exceptional():
     strategy = HitAndRunStrategy(
         Settings(

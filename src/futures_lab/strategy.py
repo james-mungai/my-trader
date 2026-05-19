@@ -180,6 +180,7 @@ class HitAndRunStrategy:
             adaptive_gate=adaptive_gate,
             target_feasible=target_feasible,
         )
+        local_execution_gate = self._local_execution_gate(side, market, higher_timeframe_gate)
         blockers = []
         if not target_feasible and not adaptive_entry_allowed:
             blockers.append("target_feasibility")
@@ -189,6 +190,8 @@ class HitAndRunStrategy:
             blockers.append("side_separation")
         if not higher_timeframe_gate["allowed"]:
             blockers.append(higher_timeframe_gate["blocker"])
+        if not local_execution_gate["allowed"]:
+            blockers.append(local_execution_gate["blocker"])
 
         row = {
             "confirmed": True,
@@ -205,6 +208,7 @@ class HitAndRunStrategy:
             "adaptive_entry_allowed": adaptive_entry_allowed,
             "adaptive_gate": adaptive_gate,
             "higher_timeframe_gate": higher_timeframe_gate,
+            "local_execution_gate": local_execution_gate,
             "range_180s_pct": market.range_180s_pct,
             "min_required_range_180s_pct": self._min_target_feasible_range_pct(),
             "min_adaptive_range_180s_pct": self._min_adaptive_range_pct(),
@@ -232,6 +236,12 @@ class HitAndRunStrategy:
             return (
                 "stateful momentum confirmed but higher-timeframe gate blocked countertrend trade: "
                 f"bias={gate.get('bias_side')} strength={gate.get('bias_strength')}"
+            )
+        if "local_execution_countertrend" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("local_execution_gate") or {}
+            return (
+                "stateful momentum confirmed but local execution gate blocked early trigger: "
+                f"5m={gate.get('structure_5m')} trend={gate.get('trend_score_5m')}"
             )
         return (
             "stateful momentum confirmed but score blocked: "
@@ -841,6 +851,78 @@ class HitAndRunStrategy:
             "target_move_pct": target,
             "stop_move_pct": self.settings.slow_stop_move_pct,
         }
+
+    def _local_execution_gate(self, side: str, market: MarketState, higher_timeframe_gate: dict) -> dict:
+        timeframes = market.higher_timeframe_context.get("timeframes", {}) if market.higher_timeframe_context else {}
+        frame_5m = timeframes.get("5m") or {}
+        structure = str(frame_5m.get("structure") or "")
+        trend_score = float(frame_5m.get("trend_score") or 0.0)
+        taker_buy_ratio_5m = frame_5m.get("taker_buy_ratio")
+        range_position_5m = frame_5m.get("range_position")
+        book = market.book_imbalance_top or 0.0
+        depth = market.depth_imbalance_top5 if market.depth_imbalance_top5 is not None else book
+        pressure = (book + depth) / 2.0
+        local_reversal_confirmed = self._local_reversal_confirmed(side, market, pressure)
+        profile = higher_timeframe_gate.get("profile")
+        enabled = self.settings.local_execution_gate_enabled
+        base = {
+            "enabled": enabled,
+            "allowed": True,
+            "blocker": None,
+            "profile": profile,
+            "structure_5m": structure,
+            "trend_score_5m": round(trend_score, 4),
+            "range_position_5m": range_position_5m,
+            "taker_buy_ratio_5m": taker_buy_ratio_5m,
+            "pressure": round(pressure, 4),
+            "local_reversal_confirmed": local_reversal_confirmed,
+        }
+        if not enabled or not frame_5m:
+            return base
+        if profile not in {"htf_aligned_fast", "countertrend_exception", "weak_or_neutral_htf", "fast"}:
+            return base
+
+        threshold = self.settings.local_5m_countertrend_trend_threshold
+        if side == "short":
+            local_uptrend = structure in {"uptrend_breakout", "uptrend_pullback"} or trend_score >= threshold
+            local_buy_pressure = (
+                (taker_buy_ratio_5m is not None and taker_buy_ratio_5m >= 0.515)
+                or (range_position_5m is not None and range_position_5m >= 0.60)
+            )
+            if local_uptrend and local_buy_pressure and not local_reversal_confirmed:
+                return base | {"allowed": False, "blocker": "local_execution_countertrend"}
+        if side == "long":
+            local_downtrend = structure in {"downtrend_breakdown", "downtrend_bounce"} or trend_score <= -threshold
+            local_sell_pressure = (
+                (taker_buy_ratio_5m is not None and taker_buy_ratio_5m <= 0.485)
+                or (range_position_5m is not None and range_position_5m <= 0.40)
+            )
+            if local_downtrend and local_sell_pressure and not local_reversal_confirmed:
+                return base | {"allowed": False, "blocker": "local_execution_countertrend"}
+        return base
+
+    def _local_reversal_confirmed(self, side: str, market: MarketState, pressure: float) -> bool:
+        r15 = market.return_15s_pct or 0.0
+        r60 = market.return_60s_pct or 0.0
+        buy_10s = market.taker_buy_ratio_10s
+        buy_30s = market.taker_buy_ratio_30s
+        if buy_10s is None or buy_30s is None:
+            return False
+        if side == "short":
+            return (
+                r15 <= -self.settings.local_reversal_return_15s_pct
+                and r60 <= -self.settings.local_reversal_return_60s_pct
+                and buy_10s <= 0.34
+                and buy_30s <= 0.52
+                and pressure <= -self.settings.local_reversal_pressure
+            )
+        return (
+            r15 >= self.settings.local_reversal_return_15s_pct
+            and r60 >= self.settings.local_reversal_return_60s_pct
+            and buy_10s >= 0.66
+            and buy_30s >= 0.55
+            and pressure >= self.settings.local_reversal_pressure
+        )
 
     def _required_score(self, side: str, opposing_score: float, stateful_filter: dict | None) -> float:
         min_score = self.settings.min_confidence

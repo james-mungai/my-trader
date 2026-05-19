@@ -71,6 +71,11 @@ class Settings(BaseSettings):
         default=0.0050,
         alias="HIGHER_TIMEFRAME_STRONG_EXCEPTION_TARGET_MOVE_PCT",
     )
+    local_execution_gate_enabled: bool = Field(default=True, alias="LOCAL_EXECUTION_GATE_ENABLED")
+    local_5m_countertrend_trend_threshold: float = Field(default=0.45, alias="LOCAL_5M_COUNTERTREND_TREND_THRESHOLD")
+    local_reversal_return_15s_pct: float = Field(default=0.00035, alias="LOCAL_REVERSAL_RETURN_15S_PCT")
+    local_reversal_return_60s_pct: float = Field(default=0.00060, alias="LOCAL_REVERSAL_RETURN_60S_PCT")
+    local_reversal_pressure: float = Field(default=0.08, alias="LOCAL_REVERSAL_PRESSURE")
     regime_outcome_horizons_seconds: str = Field(default="15,30,60,180,300,900", alias="REGIME_OUTCOME_HORIZONS_SECONDS")
     regime_outcome_target_moves_pct: str = Field(default="0.001,0.002,0.0035,0.005", alias="REGIME_OUTCOME_TARGET_MOVES_PCT")
     regime_outcome_stop_moves_pct: str = Field(default="0.001,0.002", alias="REGIME_OUTCOME_STOP_MOVES_PCT")
