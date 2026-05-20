@@ -824,6 +824,23 @@ class HitAndRunStrategy:
                 "stop_move_pct": self.settings.fast_stop_move_pct,
             }
 
+        counter_bounce_gate = self._counter_higher_timeframe_bounce_gate(
+            side=side,
+            snapshot=snapshot,
+            market=market,
+            score=score,
+            adaptive_gate=adaptive_gate,
+            target_feasible=target_feasible,
+        )
+        if counter_bounce_gate["allowed"]:
+            return base | {
+                "profile": "eth_counter_htf_bounce",
+                "exception_allowed": True,
+                "target_move_pct": self.settings.fast_target_move_pct,
+                "stop_move_pct": self.settings.fast_stop_move_pct,
+                "counter_bounce_gate": counter_bounce_gate,
+            }
+
         exception_allowed = (
             target_feasible
             and quality_score >= self.settings.higher_timeframe_countertrend_min_quality
@@ -840,6 +857,7 @@ class HitAndRunStrategy:
                 "required_quality": self.settings.higher_timeframe_countertrend_min_quality,
                 "required_score": self.settings.higher_timeframe_countertrend_min_score,
                 "required_sequence_confidence": self.settings.higher_timeframe_countertrend_min_sequence_confidence,
+                "counter_bounce_gate": counter_bounce_gate,
             }
 
         target = self.settings.higher_timeframe_exception_target_move_pct
@@ -850,6 +868,101 @@ class HitAndRunStrategy:
             "exception_allowed": True,
             "target_move_pct": target,
             "stop_move_pct": self.settings.slow_stop_move_pct,
+            "counter_bounce_gate": counter_bounce_gate,
+        }
+
+    def _counter_higher_timeframe_bounce_gate(
+        self,
+        side: str,
+        snapshot: MarketRegimeSnapshot,
+        market: MarketState,
+        score: float,
+        adaptive_gate: dict,
+        target_feasible: bool,
+    ) -> dict:
+        quality_score = float(adaptive_gate.get("quality_score") or 0.0)
+        range_pct = market.range_180s_pct or 0.0
+        blockers: list[str] = []
+        local_context = self._counter_higher_timeframe_local_context(market)
+        allowed_symbols = {
+            symbol.strip().upper()
+            for symbol in self.settings.counter_htf_bounce_symbols.split(",")
+            if symbol.strip()
+        }
+        if not self.settings.counter_htf_bounce_enabled:
+            blockers.append("disabled")
+        if market.symbol.upper() not in allowed_symbols:
+            blockers.append("symbol_not_enabled")
+        if side != "long":
+            blockers.append("side_not_long")
+        if market.higher_timeframe_bias_side != "short":
+            blockers.append("htf_not_short")
+        if not target_feasible or range_pct < self.settings.counter_htf_bounce_min_range_pct:
+            blockers.append("target_range")
+        if quality_score < self.settings.counter_htf_bounce_min_quality:
+            blockers.append("quality")
+        if score < self.settings.counter_htf_bounce_min_score:
+            blockers.append("score")
+        if snapshot.confidence < self.settings.counter_htf_bounce_min_sequence_confidence:
+            blockers.append("sequence_confidence")
+        if not adaptive_gate.get("flow_agrees"):
+            blockers.append("flow_not_confirmed")
+        if not local_context["allowed"]:
+            blockers.append("local_context")
+
+        return {
+            "enabled": self.settings.counter_htf_bounce_enabled,
+            "allowed": not blockers,
+            "blockers": blockers,
+            "symbol": market.symbol.upper(),
+            "required_symbols": sorted(allowed_symbols),
+            "quality_score": quality_score,
+            "min_quality": self.settings.counter_htf_bounce_min_quality,
+            "score": score,
+            "min_score": self.settings.counter_htf_bounce_min_score,
+            "sequence_confidence": snapshot.confidence,
+            "min_sequence_confidence": self.settings.counter_htf_bounce_min_sequence_confidence,
+            "range_180s_pct": range_pct,
+            "min_range_180s_pct": self.settings.counter_htf_bounce_min_range_pct,
+            "target_feasible": target_feasible,
+            "flow_agrees": bool(adaptive_gate.get("flow_agrees")),
+            "local_context": local_context,
+        }
+
+    def _counter_higher_timeframe_local_context(self, market: MarketState) -> dict:
+        timeframes = market.higher_timeframe_context.get("timeframes", {}) if market.higher_timeframe_context else {}
+        frame_5m = timeframes.get("5m") or {}
+        frame_1h = timeframes.get("1h") or {}
+        structure_5m = str(frame_5m.get("structure") or "")
+        structure_1h = str(frame_1h.get("structure") or "")
+        trend_5m = float(frame_5m.get("trend_score") or 0.0)
+        trend_1h = float(frame_1h.get("trend_score") or 0.0)
+        return_1h = float(frame_1h.get("return_pct") or 0.0)
+        range_position_5m = frame_5m.get("range_position")
+        range_position_1h = frame_1h.get("range_position")
+
+        five_minute_reclaim = (
+            structure_5m in {"uptrend_breakout", "uptrend_pullback", "range_support_test"}
+            or trend_5m >= self.settings.local_5m_countertrend_trend_threshold
+            or (range_position_5m is not None and range_position_5m >= 0.60 and trend_5m > 0.15)
+        )
+        one_hour_improving = (
+            structure_1h in {"balanced", "range_resistance_test", "uptrend_breakout", "uptrend_pullback"}
+            or trend_1h >= -0.15
+            or return_1h >= 0.0
+            or (range_position_1h is not None and range_position_1h >= 0.50 and trend_1h > -0.30)
+        )
+        return {
+            "allowed": bool(frame_5m and frame_1h and five_minute_reclaim and one_hour_improving),
+            "structure_5m": structure_5m,
+            "trend_score_5m": round(trend_5m, 4),
+            "range_position_5m": range_position_5m,
+            "structure_1h": structure_1h,
+            "trend_score_1h": round(trend_1h, 4),
+            "return_1h_pct": return_1h,
+            "range_position_1h": range_position_1h,
+            "five_minute_reclaim": five_minute_reclaim,
+            "one_hour_improving": one_hour_improving,
         }
 
     def _local_execution_gate(self, side: str, market: MarketState, higher_timeframe_gate: dict) -> dict:
@@ -936,6 +1049,18 @@ class HitAndRunStrategy:
 
     def _trade_profile(self, mode: TradeMode, stateful_filter: dict | None, side: str) -> TradeProfile:
         higher_timeframe_gate = (stateful_filter or {}).get("higher_timeframe_gate") or {}
+        if (
+            stateful_filter is not None
+            and stateful_filter.get("side") == side
+            and higher_timeframe_gate.get("profile") == "eth_counter_htf_bounce"
+        ):
+            return TradeProfile(
+                name="eth_counter_htf_bounce",
+                mode=TradeMode.fast,
+                target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
+                stop_move_pct=float(higher_timeframe_gate["stop_move_pct"]),
+                leverage=self.settings.fast_leverage,
+            )
         if (
             stateful_filter is not None
             and stateful_filter.get("side") == side

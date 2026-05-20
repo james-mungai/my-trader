@@ -41,6 +41,7 @@ def test_raw_book_ticker_downsampling(tmp_path):
 def test_compresses_previous_rotation_bucket(tmp_path):
     settings = Settings(
         DATA_DIR=str(tmp_path),
+        SYMBOL="BTCUSDT",
         RECORD_BOOK_TICKER_MIN_INTERVAL_MS=0,
         RAW_ROTATION_MINUTES=60,
         COMPRESS_ROTATED_RAW=True,

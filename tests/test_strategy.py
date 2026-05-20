@@ -392,6 +392,64 @@ def test_stateful_momentum_blocks_counter_higher_timeframe_trade_unless_exceptio
     assert "shadow_trade" in stateful_filter
 
 
+def test_stateful_momentum_allows_eth_counter_htf_bounce_when_local_context_confirms():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            COUNTER_HTF_BOUNCE_MIN_QUALITY=0.65,
+            COUNTER_HTF_BOUNCE_MIN_SCORE=0.70,
+            COUNTER_HTF_BOUNCE_MIN_SEQUENCE_CONFIDENCE=0.85,
+        )
+    )
+    impulse = _market(
+        symbol="ETHUSDT",
+        range_180s_pct=0.003,
+        range_position_180s=0.92,
+        return_15s_pct=0.00035,
+        return_60s_pct=0.0012,
+        return_180s_pct=0.0028,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={
+            "bias": {"side": "short", "strength": 0.62, "reason": "4h/1d downtrend"},
+            "timeframes": {
+                "5m": {
+                    "structure": "uptrend_breakout",
+                    "trend_score": 0.68,
+                    "range_position": 0.76,
+                    "taker_buy_ratio": 0.54,
+                },
+                "1h": {
+                    "structure": "balanced",
+                    "trend_score": 0.12,
+                    "return_pct": 0.003,
+                    "range_position": 0.58,
+                },
+            },
+        },
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.62,
+        higher_timeframe_bias_reason="4h/1d downtrend",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.74}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00040, "taker_buy_ratio_10s": 0.76}))
+
+    assert confirmed.action == DecisionAction.propose_long
+    assert confirmed.evidence["trade_profile"] == "eth_counter_htf_bounce"
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert stateful_filter["higher_timeframe_gate"]["profile"] == "eth_counter_htf_bounce"
+    assert stateful_filter["higher_timeframe_gate"]["counter_bounce_gate"]["allowed"] is True
+    assert confirmed.target_move_pct == 0.002
+
+
 def test_stateful_momentum_blocks_breakout_when_recent_range_cannot_support_target():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
     impulse = _market(

@@ -71,6 +71,15 @@ class Settings(BaseSettings):
         default=0.0050,
         alias="HIGHER_TIMEFRAME_STRONG_EXCEPTION_TARGET_MOVE_PCT",
     )
+    counter_htf_bounce_enabled: bool = Field(default=True, alias="COUNTER_HTF_BOUNCE_ENABLED")
+    counter_htf_bounce_symbols: str = Field(default="ETHUSDT", alias="COUNTER_HTF_BOUNCE_SYMBOLS")
+    counter_htf_bounce_min_quality: float = Field(default=0.74, alias="COUNTER_HTF_BOUNCE_MIN_QUALITY")
+    counter_htf_bounce_min_score: float = Field(default=0.74, alias="COUNTER_HTF_BOUNCE_MIN_SCORE")
+    counter_htf_bounce_min_sequence_confidence: float = Field(
+        default=0.90,
+        alias="COUNTER_HTF_BOUNCE_MIN_SEQUENCE_CONFIDENCE",
+    )
+    counter_htf_bounce_min_range_pct: float = Field(default=0.0020, alias="COUNTER_HTF_BOUNCE_MIN_RANGE_PCT")
     local_execution_gate_enabled: bool = Field(default=True, alias="LOCAL_EXECUTION_GATE_ENABLED")
     local_5m_countertrend_trend_threshold: float = Field(default=0.45, alias="LOCAL_5M_COUNTERTREND_TREND_THRESHOLD")
     local_reversal_return_15s_pct: float = Field(default=0.00035, alias="LOCAL_REVERSAL_RETURN_15S_PCT")

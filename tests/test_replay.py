@@ -88,7 +88,7 @@ def test_replay_discovers_and_loads_compressed_jsonl(tmp_path):
             },
         )
 
-    settings = Settings(DATA_DIR=str(tmp_path))
+    settings = Settings(DATA_DIR=str(tmp_path), SYMBOL="BTCUSDT")
     files = discover_raw_files(settings)
     summary = replay_files(settings, files)
 
