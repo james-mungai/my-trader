@@ -117,7 +117,7 @@ class Settings(BaseSettings):
     min_gross_target_fee_multiple: float = Field(default=2.0, alias="MIN_GROSS_TARGET_FEE_MULTIPLE")
     daily_target_usd: float = Field(default=150.0, alias="DAILY_TARGET_USD")
     daily_max_loss_usd: float = Field(default=75.0, alias="DAILY_MAX_LOSS_USD")
-    max_trades_per_day: int = Field(default=1, alias="MAX_TRADES_PER_DAY")
+    max_trades_per_day: int = Field(default=0, alias="MAX_TRADES_PER_DAY")
 
     api_token: str | None = Field(default=None, alias="API_TOKEN")
 

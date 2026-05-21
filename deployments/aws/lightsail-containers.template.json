@@ -50,7 +50,7 @@
       "TAKER_FEE_BPS": "4.0",
       "DAILY_TARGET_USD": "150",
       "DAILY_MAX_LOSS_USD": "75",
-      "MAX_TRADES_PER_DAY": "1",
+      "MAX_TRADES_PER_DAY": "0",
       "API_TOKEN": "__API_TOKEN__"
     }
   }

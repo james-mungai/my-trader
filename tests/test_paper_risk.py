@@ -118,6 +118,18 @@ def test_risk_blocks_during_trade_cooldown():
     assert "cooldown" in " ".join(verdict.blockers)
 
 
+def test_risk_allows_more_than_one_trade_when_daily_trade_limit_disabled():
+    settings = Settings(MIN_CONFIDENCE=0.70, MAX_TRADES_PER_DAY=0, TRADE_COOLDOWN_SECONDS=0)
+    broker = PaperBroker(settings)
+    broker.trades_today = 5
+    market = _market()
+    decision = HitAndRunStrategy(settings).decide(market)
+
+    verdict = RiskEngine(settings).evaluate(decision, market, broker.state())
+
+    assert verdict.allowed
+
+
 def test_paper_fast_failure_exits_when_trade_does_not_move_enough():
     settings = Settings(
         MIN_CONFIDENCE=0.70,
