@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from futures_lab.config import Settings
 from futures_lab.models import DecisionAction, MarketState, Regime
 from futures_lab.strategy import HitAndRunStrategy
@@ -173,7 +175,9 @@ def test_momentum_pullback_proposes_short_in_bearish_structure():
 
 
 def test_stateful_momentum_waits_until_sequence_confirms_long():
-    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    strategy = HitAndRunStrategy(
+        Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum", FEE_EDGE_QUALITY_GATE_ENABLED=False)
+    )
     impulse = _market(
         range_position_180s=0.55,
         return_15s_pct=0.0002,
@@ -198,7 +202,9 @@ def test_stateful_momentum_waits_until_sequence_confirms_long():
 
 
 def test_stateful_momentum_waits_until_sequence_confirms_short():
-    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    strategy = HitAndRunStrategy(
+        Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum", FEE_EDGE_QUALITY_GATE_ENABLED=False)
+    )
     impulse = _market(
         range_position_180s=0.45,
         return_15s_pct=-0.0002,
@@ -224,7 +230,9 @@ def test_stateful_momentum_waits_until_sequence_confirms_short():
 
 
 def test_stateful_momentum_accepts_confirmed_long_breakout_location():
-    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    strategy = HitAndRunStrategy(
+        Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum", FEE_EDGE_QUALITY_GATE_ENABLED=False)
+    )
     impulse = _market(
         range_position_180s=0.97,
         return_15s_pct=0.00025,
@@ -249,7 +257,9 @@ def test_stateful_momentum_accepts_confirmed_long_breakout_location():
 
 
 def test_stateful_momentum_accepts_confirmed_short_breakdown_location():
-    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    strategy = HitAndRunStrategy(
+        Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum", FEE_EDGE_QUALITY_GATE_ENABLED=False)
+    )
     impulse = _market(
         range_position_180s=0.08,
         return_15s_pct=-0.00025,
@@ -275,7 +285,9 @@ def test_stateful_momentum_accepts_confirmed_short_breakdown_location():
 
 
 def test_stateful_momentum_uses_higher_timeframe_aligned_fast_profile():
-    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    strategy = HitAndRunStrategy(
+        Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum", FEE_EDGE_QUALITY_GATE_ENABLED=False)
+    )
     impulse = _market(
         range_position_180s=0.08,
         return_15s_pct=-0.00025,
@@ -400,6 +412,8 @@ def test_stateful_momentum_allows_eth_counter_htf_bounce_when_local_context_conf
             COUNTER_HTF_BOUNCE_MIN_QUALITY=0.65,
             COUNTER_HTF_BOUNCE_MIN_SCORE=0.70,
             COUNTER_HTF_BOUNCE_MIN_SEQUENCE_CONFIDENCE=0.85,
+            FEE_EDGE_FAST_MIN_QUALITY=0.65,
+            FEE_EDGE_FAST_MIN_SEQUENCE_CONFIDENCE=0.85,
         )
     )
     impulse = _market(
@@ -450,6 +464,94 @@ def test_stateful_momentum_allows_eth_counter_htf_bounce_when_local_context_conf
     assert confirmed.target_move_pct == 0.002
 
 
+def test_stateful_momentum_blocks_fee_thin_trade_when_quality_is_not_enough():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            FEE_EDGE_FAST_MIN_QUALITY=0.95,
+            FEE_EDGE_FAST_MIN_SEQUENCE_CONFIDENCE=0.85,
+        )
+    )
+    impulse = _market(
+        range_180s_pct=0.003,
+        range_position_180s=0.95,
+        return_15s_pct=0.00035,
+        return_60s_pct=0.0012,
+        return_180s_pct=0.0028,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.74}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00040, "taker_buy_ratio_10s": 0.76}))
+
+    assert confirmed.action == DecisionAction.wait
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert "fee_edge_quality" in stateful_filter["blockers"]
+    assert stateful_filter["fee_edge_gate"]["fee_thin_target"] is True
+    assert stateful_filter["fee_edge_gate"]["allowed"] is False
+
+
+def test_stateful_momentum_suppresses_duplicate_same_regime_signal():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            DUPLICATE_SIGNAL_SUPPRESSION_SECONDS=900,
+            FEE_EDGE_FAST_MIN_QUALITY=0.60,
+            FEE_EDGE_FAST_MIN_SEQUENCE_CONFIDENCE=0.80,
+        )
+    )
+    start = datetime(2026, 5, 21, 12, 0, tzinfo=timezone.utc)
+    impulse = _market(
+        last_received_at=start,
+        range_180s_pct=0.003,
+        range_position_180s=0.95,
+        return_15s_pct=0.00035,
+        return_60s_pct=0.0012,
+        return_180s_pct=0.0028,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(
+        impulse.model_copy(
+            update={"last_received_at": start + timedelta(seconds=1), "return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}
+        )
+    )
+    strategy.decide(
+        impulse.model_copy(
+            update={"last_received_at": start + timedelta(seconds=2), "return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.74}
+        )
+    )
+    first = strategy.decide(
+        impulse.model_copy(
+            update={"last_received_at": start + timedelta(seconds=3), "return_15s_pct": 0.00040, "taker_buy_ratio_10s": 0.76}
+        )
+    )
+    repeat = strategy.decide(
+        impulse.model_copy(
+            update={"last_received_at": start + timedelta(seconds=60), "return_15s_pct": 0.00041, "taker_buy_ratio_10s": 0.76}
+        )
+    )
+
+    assert first.action == DecisionAction.propose_long
+    assert repeat.action == DecisionAction.wait
+    stateful_filter = repeat.evidence["stateful_momentum_filter"]
+    assert "duplicate_signal" in stateful_filter["blockers"]
+    assert "shadow_trade" not in stateful_filter
+
+
 def test_stateful_momentum_blocks_breakout_when_recent_range_cannot_support_target():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
     impulse = _market(
@@ -489,6 +591,7 @@ def test_stateful_momentum_adaptive_gate_allows_high_confidence_low_range_long()
             STRATEGY_VARIANT="stateful_momentum",
             STATEFUL_ADAPTIVE_MIN_SCORE=0.70,
             STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE=0.85,
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
         )
     )
     impulse = _market(

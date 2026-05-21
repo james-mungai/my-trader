@@ -18,9 +18,11 @@ class TradeProfile:
 class HitAndRunStrategy:
     settings: Settings
     sequence: MarketStateMachine = field(init=False)
+    recent_stateful_signals: dict[str, dict] = field(init=False)
 
     def __post_init__(self) -> None:
         self.sequence = MarketStateMachine(history_size=self.settings.markov_state_history)
+        self.recent_stateful_signals = {}
 
     def decide(self, market: MarketState) -> Decision:
         variant = self.settings.strategy_variant.strip().lower()
@@ -181,6 +183,19 @@ class HitAndRunStrategy:
             target_feasible=target_feasible,
         )
         local_execution_gate = self._local_execution_gate(side, market, higher_timeframe_gate)
+        fee_edge_gate = self._fee_edge_quality_gate(
+            snapshot=snapshot,
+            adaptive_gate=adaptive_gate,
+            target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
+        )
+        duplicate_gate = self._duplicate_signal_gate(
+            side=side,
+            snapshot=snapshot,
+            market=market,
+            score=score,
+            quality_score=float(adaptive_gate.get("quality_score") or 0.0),
+            profile=str(higher_timeframe_gate.get("profile") or "fast"),
+        )
         blockers = []
         if not target_feasible and not adaptive_entry_allowed:
             blockers.append("target_feasibility")
@@ -192,6 +207,10 @@ class HitAndRunStrategy:
             blockers.append(higher_timeframe_gate["blocker"])
         if not local_execution_gate["allowed"]:
             blockers.append(local_execution_gate["blocker"])
+        if not fee_edge_gate["allowed"]:
+            blockers.append(fee_edge_gate["blocker"])
+        if not duplicate_gate["allowed"]:
+            blockers.append(duplicate_gate["blocker"])
 
         row = {
             "confirmed": True,
@@ -209,6 +228,8 @@ class HitAndRunStrategy:
             "adaptive_gate": adaptive_gate,
             "higher_timeframe_gate": higher_timeframe_gate,
             "local_execution_gate": local_execution_gate,
+            "fee_edge_gate": fee_edge_gate,
+            "duplicate_signal_gate": duplicate_gate,
             "range_180s_pct": market.range_180s_pct,
             "min_required_range_180s_pct": self._min_target_feasible_range_pct(),
             "min_adaptive_range_180s_pct": self._min_adaptive_range_pct(),
@@ -216,7 +237,16 @@ class HitAndRunStrategy:
             "sequence_confidence": snapshot.confidence,
             "path": [state.value for state in snapshot.path],
         }
-        if row["blocked"]:
+        if not row["blocked"]:
+            self._remember_stateful_signal(
+                side=side,
+                snapshot=snapshot,
+                market=market,
+                score=score,
+                quality_score=float(adaptive_gate.get("quality_score") or 0.0),
+                profile=str(higher_timeframe_gate.get("profile") or "fast"),
+            )
+        if row["blocked"] and "duplicate_signal" not in blockers:
             shadow = self._shadow_trade_signal(side, market, score, blockers)
             if shadow is not None:
                 row["shadow_trade"] = shadow
@@ -243,10 +273,140 @@ class HitAndRunStrategy:
                 "stateful momentum confirmed but local execution gate blocked early trigger: "
                 f"5m={gate.get('structure_5m')} trend={gate.get('trend_score_5m')}"
             )
+        if "fee_edge_quality" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("fee_edge_gate") or {}
+            return (
+                "stateful momentum confirmed but fee-edge quality gate blocked thin target: "
+                f"quality={gate.get('quality_score')} required={gate.get('min_quality')}"
+            )
+        if "duplicate_signal" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("duplicate_signal_gate") or {}
+            return (
+                "stateful momentum confirmed but duplicate signal throttle blocked repeat entry: "
+                f"elapsed={gate.get('elapsed_seconds')}s"
+            )
         return (
             "stateful momentum confirmed but score blocked: "
             f"score={stateful_filter['score']} < required={stateful_filter['required_score']}"
         )
+
+    def _fee_edge_quality_gate(
+        self,
+        snapshot: MarketRegimeSnapshot,
+        adaptive_gate: dict,
+        target_move_pct: float,
+    ) -> dict:
+        round_trip_fee_pct = 2 * (self.settings.taker_fee_bps / 10_000)
+        required_target_pct = round_trip_fee_pct * self.settings.min_gross_target_fee_multiple
+        quality_score = float(adaptive_gate.get("quality_score") or 0.0)
+        fee_buffer = max(1.0, self.settings.fee_edge_target_fee_buffer)
+        fee_thin_target = target_move_pct <= required_target_pct * fee_buffer
+        enabled = self.settings.fee_edge_quality_gate_enabled
+        allowed = True
+        blocker = None
+        if enabled and fee_thin_target:
+            allowed = (
+                quality_score >= self.settings.fee_edge_fast_min_quality
+                and snapshot.confidence >= self.settings.fee_edge_fast_min_sequence_confidence
+            )
+            if not allowed:
+                blocker = "fee_edge_quality"
+        return {
+            "enabled": enabled,
+            "allowed": allowed,
+            "blocker": blocker,
+            "target_move_pct": target_move_pct,
+            "round_trip_fee_pct": round_trip_fee_pct,
+            "required_target_pct": required_target_pct,
+            "fee_buffer": fee_buffer,
+            "fee_thin_target": fee_thin_target,
+            "quality_score": quality_score,
+            "min_quality": self.settings.fee_edge_fast_min_quality,
+            "sequence_confidence": snapshot.confidence,
+            "min_sequence_confidence": self.settings.fee_edge_fast_min_sequence_confidence,
+        }
+
+    def _duplicate_signal_gate(
+        self,
+        side: str,
+        snapshot: MarketRegimeSnapshot,
+        market: MarketState,
+        score: float,
+        quality_score: float,
+        profile: str,
+    ) -> dict:
+        key = self._stateful_signal_key(market.symbol, side, snapshot, profile)
+        previous = self.recent_stateful_signals.get(key)
+        previous_meta = None
+        if previous is not None:
+            previous_meta = {
+                "seen_at": previous["seen_at"].isoformat(),
+                "score": previous["score"],
+                "quality_score": previous["quality_score"],
+                "state": previous["state"],
+                "path": previous["path"],
+            }
+        base = {
+            "enabled": self.settings.duplicate_signal_suppression_seconds > 0,
+            "allowed": True,
+            "blocker": None,
+            "key": key,
+            "profile": profile,
+            "previous": previous_meta,
+            "score": score,
+            "quality_score": quality_score,
+            "min_quality_improvement": self.settings.duplicate_signal_min_quality_improvement,
+            "min_score_improvement": self.settings.duplicate_signal_min_score_improvement,
+        }
+        if not base["enabled"] or previous is None or market.last_received_at is None:
+            return base
+        elapsed = (market.last_received_at - previous["seen_at"]).total_seconds()
+        materially_better = (
+            quality_score >= previous["quality_score"] + self.settings.duplicate_signal_min_quality_improvement
+            or score >= previous["score"] + self.settings.duplicate_signal_min_score_improvement
+        )
+        if elapsed < self.settings.duplicate_signal_suppression_seconds and not materially_better:
+            return base | {
+                "allowed": False,
+                "blocker": "duplicate_signal",
+                "elapsed_seconds": elapsed,
+                "suppression_seconds": self.settings.duplicate_signal_suppression_seconds,
+                "materially_better": materially_better,
+            }
+        return base | {
+            "elapsed_seconds": elapsed,
+            "suppression_seconds": self.settings.duplicate_signal_suppression_seconds,
+            "materially_better": materially_better,
+        }
+
+    def _remember_stateful_signal(
+        self,
+        side: str,
+        snapshot: MarketRegimeSnapshot,
+        market: MarketState,
+        score: float,
+        quality_score: float,
+        profile: str,
+    ) -> None:
+        if market.last_received_at is None:
+            return
+        key = self._stateful_signal_key(market.symbol, side, snapshot, profile)
+        self.recent_stateful_signals[key] = {
+            "seen_at": market.last_received_at,
+            "score": score,
+            "quality_score": quality_score,
+            "state": snapshot.state.value,
+            "path": [state.value for state in snapshot.path],
+        }
+
+    def _stateful_signal_key(
+        self,
+        symbol: str,
+        side: str,
+        snapshot: MarketRegimeSnapshot,
+        profile: str,
+    ) -> str:
+        return f"{symbol.upper()}:{side}:{snapshot.state.value}:{profile}"
 
     def _blockers(self, market: MarketState) -> list[str]:
         blockers = []
