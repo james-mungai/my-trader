@@ -247,7 +247,7 @@ def test_stateful_momentum_accepts_confirmed_long_breakout_location():
     strategy.decide(impulse)
     strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
     strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00032, "taker_buy_ratio_10s": 0.70}))
-    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.72}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00036, "taker_buy_ratio_10s": 0.72}))
 
     assert confirmed.action == DecisionAction.propose_long
     assert confirmed.confidence >= 0.70
@@ -275,7 +275,7 @@ def test_stateful_momentum_accepts_confirmed_short_breakdown_location():
     strategy.decide(impulse)
     strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
     strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00032, "taker_buy_ratio_10s": 0.30}))
-    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00034, "taker_buy_ratio_10s": 0.28}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00036, "taker_buy_ratio_10s": 0.28}))
 
     assert confirmed.action == DecisionAction.propose_short
     assert confirmed.confidence >= 0.70
@@ -308,7 +308,7 @@ def test_stateful_momentum_uses_higher_timeframe_aligned_fast_profile():
     strategy.decide(impulse)
     strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
     strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00032, "taker_buy_ratio_10s": 0.30}))
-    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00034, "taker_buy_ratio_10s": 0.28}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00036, "taker_buy_ratio_10s": 0.28}))
 
     assert confirmed.action == DecisionAction.propose_short
     assert confirmed.target_move_pct == 0.002
@@ -498,6 +498,71 @@ def test_stateful_momentum_blocks_fee_thin_trade_when_quality_is_not_enough():
     assert stateful_filter["fee_edge_gate"]["allowed"] is False
 
 
+def test_stateful_momentum_blocks_entry_without_immediate_follow_through():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
+        )
+    )
+    impulse = _market(
+        range_180s_pct=0.003,
+        range_position_180s=0.95,
+        return_15s_pct=0.00025,
+        return_60s_pct=0.0012,
+        return_180s_pct=0.0028,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.74}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00032, "taker_buy_ratio_10s": 0.76}))
+
+    assert confirmed.action == DecisionAction.wait
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert "entry_follow_through" in stateful_filter["blockers"]
+    assert stateful_filter["entry_follow_through_gate"]["checks"]["return_15s"] is False
+    assert stateful_filter["entry_follow_through_gate"]["allowed"] is False
+
+
+def test_stateful_momentum_allows_entry_with_immediate_follow_through():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
+        )
+    )
+    impulse = _market(
+        range_180s_pct=0.003,
+        range_position_180s=0.95,
+        return_15s_pct=0.00035,
+        return_60s_pct=0.0012,
+        return_180s_pct=0.0028,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.74}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00040, "taker_buy_ratio_10s": 0.76}))
+
+    assert confirmed.action == DecisionAction.propose_long
+    gate = confirmed.evidence["stateful_momentum_filter"]["entry_follow_through_gate"]
+    assert gate["allowed"] is True
+    assert gate["confirmations"] >= 4
+
+
 def test_stateful_momentum_suppresses_duplicate_same_regime_signal():
     strategy = HitAndRunStrategy(
         Settings(
@@ -553,7 +618,9 @@ def test_stateful_momentum_suppresses_duplicate_same_regime_signal():
 
 
 def test_stateful_momentum_blocks_breakout_when_recent_range_cannot_support_target():
-    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    strategy = HitAndRunStrategy(
+        Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum", ENTRY_FOLLOW_THROUGH_GATE_ENABLED=False)
+    )
     impulse = _market(
         range_180s_pct=0.0008,
         range_position_180s=0.02,

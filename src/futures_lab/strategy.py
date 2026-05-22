@@ -196,6 +196,11 @@ class HitAndRunStrategy:
             quality_score=float(adaptive_gate.get("quality_score") or 0.0),
             profile=str(higher_timeframe_gate.get("profile") or "fast"),
         )
+        entry_follow_through_gate = self._entry_follow_through_gate(
+            side=side,
+            market=market,
+            target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
+        )
         blockers = []
         if not target_feasible and not adaptive_entry_allowed:
             blockers.append("target_feasibility")
@@ -211,6 +216,8 @@ class HitAndRunStrategy:
             blockers.append(fee_edge_gate["blocker"])
         if not duplicate_gate["allowed"]:
             blockers.append(duplicate_gate["blocker"])
+        if not entry_follow_through_gate["allowed"]:
+            blockers.append(entry_follow_through_gate["blocker"])
 
         row = {
             "confirmed": True,
@@ -230,6 +237,7 @@ class HitAndRunStrategy:
             "local_execution_gate": local_execution_gate,
             "fee_edge_gate": fee_edge_gate,
             "duplicate_signal_gate": duplicate_gate,
+            "entry_follow_through_gate": entry_follow_through_gate,
             "range_180s_pct": market.range_180s_pct,
             "min_required_range_180s_pct": self._min_target_feasible_range_pct(),
             "min_adaptive_range_180s_pct": self._min_adaptive_range_pct(),
@@ -284,6 +292,12 @@ class HitAndRunStrategy:
             return (
                 "stateful momentum confirmed but duplicate signal throttle blocked repeat entry: "
                 f"elapsed={gate.get('elapsed_seconds')}s"
+            )
+        if "entry_follow_through" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("entry_follow_through_gate") or {}
+            return (
+                "stateful momentum confirmed but entry follow-through gate blocked early entry: "
+                f"confirmations={gate.get('confirmations')} score={gate.get('score')}"
             )
         return (
             "stateful momentum confirmed but score blocked: "
@@ -398,6 +412,90 @@ class HitAndRunStrategy:
             "state": snapshot.state.value,
             "path": [state.value for state in snapshot.path],
         }
+
+    def _entry_follow_through_gate(self, side: str, market: MarketState, target_move_pct: float) -> dict:
+        enabled = self.settings.entry_follow_through_gate_enabled
+        applies = target_move_pct <= self.settings.fast_target_move_pct
+        pressure = self._market_pressure(market)
+        r15 = market.return_15s_pct or 0.0
+        r60 = market.return_60s_pct or 0.0
+        buy_10s = market.taker_buy_ratio_10s
+        buy_30s = market.taker_buy_ratio_30s
+
+        if side == "long":
+            return_15s = r15 >= self.settings.entry_follow_through_return_15s_pct
+            return_60s = r60 >= self.settings.entry_follow_through_return_60s_pct
+            flow_10s = buy_10s is not None and buy_10s >= 0.66
+            flow_30s = buy_30s is not None and buy_30s >= 0.55
+            pressure_aligned = pressure >= self.settings.entry_follow_through_pressure
+            return_15s_score = self._clamp(r15 / self.settings.entry_follow_through_return_15s_pct)
+            return_60s_score = self._clamp(r60 / self.settings.entry_follow_through_return_60s_pct)
+            flow_10s_score = self._clamp(((buy_10s or 0.0) - 0.50) / 0.20)
+            flow_30s_score = self._clamp(((buy_30s or 0.0) - 0.50) / 0.16)
+            pressure_score = self._clamp((pressure + 0.05) / (self.settings.entry_follow_through_pressure + 0.05))
+        else:
+            return_15s = r15 <= -self.settings.entry_follow_through_return_15s_pct
+            return_60s = r60 <= -self.settings.entry_follow_through_return_60s_pct
+            flow_10s = buy_10s is not None and buy_10s <= 0.34
+            flow_30s = buy_30s is not None and buy_30s <= 0.45
+            pressure_aligned = pressure <= -self.settings.entry_follow_through_pressure
+            return_15s_score = self._clamp((-r15) / self.settings.entry_follow_through_return_15s_pct)
+            return_60s_score = self._clamp((-r60) / self.settings.entry_follow_through_return_60s_pct)
+            flow_10s_score = self._clamp((0.50 - (buy_10s or 1.0)) / 0.20)
+            flow_30s_score = self._clamp((0.50 - (buy_30s or 1.0)) / 0.16)
+            pressure_score = self._clamp((-pressure + 0.05) / (self.settings.entry_follow_through_pressure + 0.05))
+
+        checks = {
+            "return_15s": return_15s,
+            "return_60s": return_60s,
+            "flow_10s": flow_10s,
+            "flow_30s": flow_30s,
+            "pressure": pressure_aligned,
+        }
+        confirmations = sum(1 for value in checks.values() if value)
+        score = round(
+            0.28 * return_15s_score
+            + 0.22 * return_60s_score
+            + 0.20 * flow_10s_score
+            + 0.12 * flow_30s_score
+            + 0.18 * pressure_score,
+            4,
+        )
+        required_confirmations = max(1, min(5, self.settings.entry_follow_through_min_confirmations))
+        mandatory = checks["return_15s"] and checks["flow_10s"]
+        allowed = (
+            not enabled
+            or not applies
+            or (
+                confirmations >= required_confirmations
+                and score >= self.settings.entry_follow_through_min_score
+                and mandatory
+            )
+        )
+        return {
+            "enabled": enabled,
+            "applies": applies,
+            "allowed": allowed,
+            "blocker": None if allowed else "entry_follow_through",
+            "side": side,
+            "target_move_pct": target_move_pct,
+            "score": score,
+            "min_score": self.settings.entry_follow_through_min_score,
+            "confirmations": confirmations,
+            "min_confirmations": required_confirmations,
+            "mandatory_confirmed": mandatory,
+            "checks": checks,
+            "return_15s_pct": r15,
+            "return_60s_pct": r60,
+            "taker_buy_ratio_10s": buy_10s,
+            "taker_buy_ratio_30s": buy_30s,
+            "pressure": round(pressure, 4),
+        }
+
+    def _market_pressure(self, market: MarketState) -> float:
+        book = market.book_imbalance_top or 0.0
+        depth = market.depth_imbalance_top5 if market.depth_imbalance_top5 is not None else book
+        return (book + depth) / 2.0
 
     def _stateful_signal_key(
         self,
