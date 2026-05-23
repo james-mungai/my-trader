@@ -73,13 +73,13 @@ class Settings(BaseSettings):
     )
     counter_htf_bounce_enabled: bool = Field(default=True, alias="COUNTER_HTF_BOUNCE_ENABLED")
     counter_htf_bounce_symbols: str = Field(default="ETHUSDT", alias="COUNTER_HTF_BOUNCE_SYMBOLS")
-    counter_htf_bounce_min_quality: float = Field(default=0.74, alias="COUNTER_HTF_BOUNCE_MIN_QUALITY")
-    counter_htf_bounce_min_score: float = Field(default=0.74, alias="COUNTER_HTF_BOUNCE_MIN_SCORE")
+    counter_htf_bounce_min_quality: float = Field(default=0.68, alias="COUNTER_HTF_BOUNCE_MIN_QUALITY")
+    counter_htf_bounce_min_score: float = Field(default=0.70, alias="COUNTER_HTF_BOUNCE_MIN_SCORE")
     counter_htf_bounce_min_sequence_confidence: float = Field(
-        default=0.90,
+        default=0.85,
         alias="COUNTER_HTF_BOUNCE_MIN_SEQUENCE_CONFIDENCE",
     )
-    counter_htf_bounce_min_range_pct: float = Field(default=0.0020, alias="COUNTER_HTF_BOUNCE_MIN_RANGE_PCT")
+    counter_htf_bounce_min_range_pct: float = Field(default=0.0012, alias="COUNTER_HTF_BOUNCE_MIN_RANGE_PCT")
     local_execution_gate_enabled: bool = Field(default=True, alias="LOCAL_EXECUTION_GATE_ENABLED")
     local_5m_countertrend_trend_threshold: float = Field(default=0.45, alias="LOCAL_5M_COUNTERTREND_TREND_THRESHOLD")
     local_reversal_return_15s_pct: float = Field(default=0.00035, alias="LOCAL_REVERSAL_RETURN_15S_PCT")
@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     fee_edge_quality_gate_enabled: bool = Field(default=True, alias="FEE_EDGE_QUALITY_GATE_ENABLED")
     fee_edge_fast_min_quality: float = Field(default=0.74, alias="FEE_EDGE_FAST_MIN_QUALITY")
     fee_edge_fast_min_sequence_confidence: float = Field(default=0.90, alias="FEE_EDGE_FAST_MIN_SEQUENCE_CONFIDENCE")
+    fee_edge_counter_htf_bounce_min_quality: float = Field(default=0.68, alias="FEE_EDGE_COUNTER_HTF_BOUNCE_MIN_QUALITY")
+    fee_edge_counter_htf_bounce_min_sequence_confidence: float = Field(
+        default=0.85,
+        alias="FEE_EDGE_COUNTER_HTF_BOUNCE_MIN_SEQUENCE_CONFIDENCE",
+    )
     fee_edge_target_fee_buffer: float = Field(default=1.25, alias="FEE_EDGE_TARGET_FEE_BUFFER")
     duplicate_signal_suppression_seconds: int = Field(default=900, alias="DUPLICATE_SIGNAL_SUPPRESSION_SECONDS")
     duplicate_signal_min_quality_improvement: float = Field(default=0.04, alias="DUPLICATE_SIGNAL_MIN_QUALITY_IMPROVEMENT")
@@ -100,6 +105,9 @@ class Settings(BaseSettings):
     entry_follow_through_pressure: float = Field(default=0.08, alias="ENTRY_FOLLOW_THROUGH_PRESSURE")
     entry_follow_through_htf_aligned_override_score: float = Field(
         default=0.80, alias="ENTRY_FOLLOW_THROUGH_HTF_ALIGNED_OVERRIDE_SCORE"
+    )
+    entry_follow_through_counter_htf_bounce_override_score: float = Field(
+        default=0.84, alias="ENTRY_FOLLOW_THROUGH_COUNTER_HTF_BOUNCE_OVERRIDE_SCORE"
     )
     regime_outcome_horizons_seconds: str = Field(default="15,30,60,180,300,900", alias="REGIME_OUTCOME_HORIZONS_SECONDS")
     regime_outcome_target_moves_pct: str = Field(default="0.001,0.002,0.0035,0.005", alias="REGIME_OUTCOME_TARGET_MOVES_PCT")

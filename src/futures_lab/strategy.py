@@ -172,7 +172,6 @@ class HitAndRunStrategy:
         adaptive_gate = self._adaptive_low_range_gate(side, snapshot, market, score, opposing_score)
         adaptive_entry_allowed = adaptive_gate["allowed"]
         min_score = self.settings.stateful_adaptive_min_score if adaptive_entry_allowed else self.settings.min_confidence
-        required_score = max(min_score, opposing_score + 0.04)
         target_feasible = self._target_move_feasible(market)
         higher_timeframe_gate = self._higher_timeframe_execution_gate(
             side=side,
@@ -182,11 +181,15 @@ class HitAndRunStrategy:
             adaptive_gate=adaptive_gate,
             target_feasible=target_feasible,
         )
+        if higher_timeframe_gate.get("profile") == "eth_counter_htf_bounce":
+            min_score = min(min_score, self.settings.counter_htf_bounce_min_score)
+        required_score = max(min_score, opposing_score + 0.04)
         local_execution_gate = self._local_execution_gate(side, market, higher_timeframe_gate)
         fee_edge_gate = self._fee_edge_quality_gate(
             snapshot=snapshot,
             adaptive_gate=adaptive_gate,
             target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
+            trade_profile=str(higher_timeframe_gate.get("profile") or "fast"),
         )
         duplicate_gate = self._duplicate_signal_gate(
             side=side,
@@ -310,6 +313,7 @@ class HitAndRunStrategy:
         snapshot: MarketRegimeSnapshot,
         adaptive_gate: dict,
         target_move_pct: float,
+        trade_profile: str,
     ) -> dict:
         round_trip_fee_pct = 2 * (self.settings.taker_fee_bps / 10_000)
         required_target_pct = round_trip_fee_pct * self.settings.min_gross_target_fee_multiple
@@ -317,12 +321,17 @@ class HitAndRunStrategy:
         fee_buffer = max(1.0, self.settings.fee_edge_target_fee_buffer)
         fee_thin_target = target_move_pct <= required_target_pct * fee_buffer
         enabled = self.settings.fee_edge_quality_gate_enabled
+        min_quality = self.settings.fee_edge_fast_min_quality
+        min_sequence_confidence = self.settings.fee_edge_fast_min_sequence_confidence
+        if trade_profile == "eth_counter_htf_bounce":
+            min_quality = self.settings.fee_edge_counter_htf_bounce_min_quality
+            min_sequence_confidence = self.settings.fee_edge_counter_htf_bounce_min_sequence_confidence
         allowed = True
         blocker = None
         if enabled and fee_thin_target:
             allowed = (
-                quality_score >= self.settings.fee_edge_fast_min_quality
-                and snapshot.confidence >= self.settings.fee_edge_fast_min_sequence_confidence
+                quality_score >= min_quality
+                and snapshot.confidence >= min_sequence_confidence
             )
             if not allowed:
                 blocker = "fee_edge_quality"
@@ -335,10 +344,11 @@ class HitAndRunStrategy:
             "required_target_pct": required_target_pct,
             "fee_buffer": fee_buffer,
             "fee_thin_target": fee_thin_target,
+            "trade_profile": trade_profile,
             "quality_score": quality_score,
-            "min_quality": self.settings.fee_edge_fast_min_quality,
+            "min_quality": min_quality,
             "sequence_confidence": snapshot.confidence,
-            "min_sequence_confidence": self.settings.fee_edge_fast_min_sequence_confidence,
+            "min_sequence_confidence": min_sequence_confidence,
         }
 
     def _duplicate_signal_gate(
@@ -474,7 +484,15 @@ class HitAndRunStrategy:
             and confirmations >= min(required_confirmations, 3)
             and score >= self.settings.entry_follow_through_htf_aligned_override_score
         )
-        mandatory = strict_mandatory or htf_aligned_override
+        counter_htf_bounce_override = (
+            trade_profile == "eth_counter_htf_bounce"
+            and checks["return_60s"]
+            and checks["flow_10s"]
+            and checks["pressure"]
+            and confirmations >= min(required_confirmations, 4)
+            and score >= self.settings.entry_follow_through_counter_htf_bounce_override_score
+        )
+        mandatory = strict_mandatory or htf_aligned_override or counter_htf_bounce_override
         allowed = (
             not enabled
             or not applies
@@ -495,11 +513,13 @@ class HitAndRunStrategy:
             "score": score,
             "min_score": self.settings.entry_follow_through_min_score,
             "htf_aligned_override_score": self.settings.entry_follow_through_htf_aligned_override_score,
+            "counter_htf_bounce_override_score": self.settings.entry_follow_through_counter_htf_bounce_override_score,
             "confirmations": confirmations,
             "min_confirmations": required_confirmations,
             "mandatory_confirmed": mandatory,
             "strict_mandatory_confirmed": strict_mandatory,
             "htf_aligned_override_confirmed": htf_aligned_override,
+            "counter_htf_bounce_override_confirmed": counter_htf_bounce_override,
             "checks": checks,
             "return_15s_pct": r15,
             "return_60s_pct": r60,
@@ -1319,6 +1339,13 @@ class HitAndRunStrategy:
             and stateful_filter.get("adaptive_entry_allowed")
         ):
             min_score = min(min_score, self.settings.stateful_adaptive_min_score)
+        higher_timeframe_gate = (stateful_filter or {}).get("higher_timeframe_gate") or {}
+        if (
+            stateful_filter is not None
+            and stateful_filter.get("side") == side
+            and higher_timeframe_gate.get("profile") == "eth_counter_htf_bounce"
+        ):
+            min_score = min(min_score, self.settings.counter_htf_bounce_min_score)
         return max(min_score, opposing_score + 0.04)
 
     def _trade_profile(self, mode: TradeMode, stateful_filter: dict | None, side: str) -> TradeProfile:
