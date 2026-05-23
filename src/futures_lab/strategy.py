@@ -200,6 +200,7 @@ class HitAndRunStrategy:
             side=side,
             market=market,
             target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
+            trade_profile=str(higher_timeframe_gate.get("profile") or "fast"),
         )
         blockers = []
         if not target_feasible and not adaptive_entry_allowed:
@@ -413,7 +414,9 @@ class HitAndRunStrategy:
             "path": [state.value for state in snapshot.path],
         }
 
-    def _entry_follow_through_gate(self, side: str, market: MarketState, target_move_pct: float) -> dict:
+    def _entry_follow_through_gate(
+        self, side: str, market: MarketState, target_move_pct: float, trade_profile: str
+    ) -> dict:
         enabled = self.settings.entry_follow_through_gate_enabled
         applies = target_move_pct <= self.settings.fast_target_move_pct
         pressure = self._market_pressure(market)
@@ -462,7 +465,16 @@ class HitAndRunStrategy:
             4,
         )
         required_confirmations = max(1, min(5, self.settings.entry_follow_through_min_confirmations))
-        mandatory = checks["return_15s"] and checks["flow_10s"]
+        strict_mandatory = checks["return_15s"] and checks["flow_10s"]
+        htf_aligned_override = (
+            trade_profile == "htf_aligned_fast"
+            and checks["return_60s"]
+            and checks["flow_10s"]
+            and checks["pressure"]
+            and confirmations >= min(required_confirmations, 3)
+            and score >= self.settings.entry_follow_through_htf_aligned_override_score
+        )
+        mandatory = strict_mandatory or htf_aligned_override
         allowed = (
             not enabled
             or not applies
@@ -478,12 +490,16 @@ class HitAndRunStrategy:
             "allowed": allowed,
             "blocker": None if allowed else "entry_follow_through",
             "side": side,
+            "trade_profile": trade_profile,
             "target_move_pct": target_move_pct,
             "score": score,
             "min_score": self.settings.entry_follow_through_min_score,
+            "htf_aligned_override_score": self.settings.entry_follow_through_htf_aligned_override_score,
             "confirmations": confirmations,
             "min_confirmations": required_confirmations,
             "mandatory_confirmed": mandatory,
+            "strict_mandatory_confirmed": strict_mandatory,
+            "htf_aligned_override_confirmed": htf_aligned_override,
             "checks": checks,
             "return_15s_pct": r15,
             "return_60s_pct": r60,

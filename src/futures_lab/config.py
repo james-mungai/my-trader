@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     entry_follow_through_return_15s_pct: float = Field(default=0.00035, alias="ENTRY_FOLLOW_THROUGH_RETURN_15S_PCT")
     entry_follow_through_return_60s_pct: float = Field(default=0.00060, alias="ENTRY_FOLLOW_THROUGH_RETURN_60S_PCT")
     entry_follow_through_pressure: float = Field(default=0.08, alias="ENTRY_FOLLOW_THROUGH_PRESSURE")
+    entry_follow_through_htf_aligned_override_score: float = Field(
+        default=0.80, alias="ENTRY_FOLLOW_THROUGH_HTF_ALIGNED_OVERRIDE_SCORE"
+    )
     regime_outcome_horizons_seconds: str = Field(default="15,30,60,180,300,900", alias="REGIME_OUTCOME_HORIZONS_SECONDS")
     regime_outcome_target_moves_pct: str = Field(default="0.001,0.002,0.0035,0.005", alias="REGIME_OUTCOME_TARGET_MOVES_PCT")
     regime_outcome_stop_moves_pct: str = Field(default="0.001,0.002", alias="REGIME_OUTCOME_STOP_MOVES_PCT")

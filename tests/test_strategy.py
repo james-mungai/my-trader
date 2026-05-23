@@ -563,6 +563,45 @@ def test_stateful_momentum_allows_entry_with_immediate_follow_through():
     assert gate["confirmations"] >= 4
 
 
+def test_stateful_momentum_allows_htf_aligned_entry_with_strong_flow_before_15s_threshold():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
+        )
+    )
+    impulse = _market(
+        range_position_180s=0.08,
+        return_15s_pct=-0.00025,
+        return_60s_pct=-0.0012,
+        return_180s_pct=-0.0028,
+        taker_buy_ratio_10s=0.22,
+        taker_buy_ratio_30s=0.34,
+        book_imbalance_top=-0.35,
+        depth_imbalance_top5=-0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={"bias": {"side": "short", "strength": 0.55, "reason": "1h/4h downtrend"}},
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.55,
+        higher_timeframe_bias_reason="1h/4h downtrend",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00030, "taker_buy_ratio_10s": 0.30}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00026, "taker_buy_ratio_10s": 0.28}))
+
+    assert confirmed.action == DecisionAction.propose_short
+    gate = confirmed.evidence["stateful_momentum_filter"]["entry_follow_through_gate"]
+    assert gate["trade_profile"] == "htf_aligned_fast"
+    assert gate["checks"]["return_15s"] is False
+    assert gate["strict_mandatory_confirmed"] is False
+    assert gate["htf_aligned_override_confirmed"] is True
+    assert gate["allowed"] is True
+
+
 def test_stateful_momentum_suppresses_duplicate_same_regime_signal():
     strategy = HitAndRunStrategy(
         Settings(
