@@ -518,6 +518,94 @@ def test_stateful_momentum_allows_eth_counter_htf_bounce_with_relief_follow_thro
     assert stateful_filter["fee_edge_gate"]["allowed"] is True
 
 
+def test_stateful_momentum_allows_eth_counter_htf_bounce_when_one_hour_leads_relief():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        symbol="ETHUSDT",
+        range_180s_pct=0.0034,
+        range_position_180s=0.88,
+        return_15s_pct=0.00030,
+        return_60s_pct=0.0014,
+        return_180s_pct=0.0030,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={
+            "bias": {"side": "short", "strength": 0.62, "reason": "4h/1d downtrend"},
+            "timeframes": {
+                "5m": {
+                    "structure": "downtrend_breakdown",
+                    "trend_score": -0.92,
+                    "range_position": 0.18,
+                    "taker_buy_ratio": 0.46,
+                },
+                "1h": {
+                    "structure": "balanced",
+                    "trend_score": 0.20,
+                    "return_pct": 0.004,
+                    "range_position": 0.35,
+                },
+            },
+        },
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.62,
+        higher_timeframe_bias_reason="4h/1d downtrend",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00020, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00028, "taker_buy_ratio_10s": 0.74}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00030, "taker_buy_ratio_10s": 0.78}))
+
+    assert confirmed.action == DecisionAction.propose_long
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    counter_gate = stateful_filter["higher_timeframe_gate"]["counter_bounce_gate"]
+    assert stateful_filter["higher_timeframe_gate"]["profile"] == "eth_counter_htf_bounce"
+    assert counter_gate["allowed"] is True
+    assert counter_gate["local_context"]["five_minute_reclaim"] is False
+    assert counter_gate["local_context"]["one_hour_led_relief"] is True
+
+
+def test_stateful_momentum_blocks_weak_neutral_short_without_stronger_quality():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
+        )
+    )
+    impulse = _market(
+        range_position_180s=0.08,
+        return_15s_pct=-0.00025,
+        return_60s_pct=-0.0009,
+        return_180s_pct=-0.0026,
+        taker_buy_ratio_10s=0.26,
+        taker_buy_ratio_30s=0.35,
+        book_imbalance_top=-0.25,
+        depth_imbalance_top5=-0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={"bias": {"side": "neutral", "strength": 0.15, "reason": "mixed"}},
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="neutral",
+        higher_timeframe_bias_strength=0.15,
+        higher_timeframe_bias_reason="mixed",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00025, "taker_buy_ratio_10s": 0.44}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00032, "taker_buy_ratio_10s": 0.30}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00036, "taker_buy_ratio_10s": 0.28}))
+
+    assert confirmed.action == DecisionAction.wait
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert "weak_neutral_short_quality" in stateful_filter["blockers"]
+    assert stateful_filter["higher_timeframe_gate"]["profile"] == "weak_or_neutral_htf"
+    assert stateful_filter["weak_neutral_short_gate"]["allowed"] is False
+
+
 def test_stateful_momentum_blocks_fee_thin_trade_when_quality_is_not_enough():
     strategy = HitAndRunStrategy(
         Settings(

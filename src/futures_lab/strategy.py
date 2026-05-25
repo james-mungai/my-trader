@@ -205,6 +205,14 @@ class HitAndRunStrategy:
             target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
             trade_profile=str(higher_timeframe_gate.get("profile") or "fast"),
         )
+        weak_neutral_short_gate = self._weak_neutral_short_gate(
+            side=side,
+            snapshot=snapshot,
+            adaptive_gate=adaptive_gate,
+            higher_timeframe_gate=higher_timeframe_gate,
+            local_execution_gate=local_execution_gate,
+            entry_follow_through_gate=entry_follow_through_gate,
+        )
         blockers = []
         if not target_feasible and not adaptive_entry_allowed:
             blockers.append("target_feasibility")
@@ -222,6 +230,8 @@ class HitAndRunStrategy:
             blockers.append(duplicate_gate["blocker"])
         if not entry_follow_through_gate["allowed"]:
             blockers.append(entry_follow_through_gate["blocker"])
+        if not weak_neutral_short_gate["allowed"]:
+            blockers.append(weak_neutral_short_gate["blocker"])
 
         row = {
             "confirmed": True,
@@ -242,6 +252,7 @@ class HitAndRunStrategy:
             "fee_edge_gate": fee_edge_gate,
             "duplicate_signal_gate": duplicate_gate,
             "entry_follow_through_gate": entry_follow_through_gate,
+            "weak_neutral_short_gate": weak_neutral_short_gate,
             "range_180s_pct": market.range_180s_pct,
             "min_required_range_180s_pct": self._min_target_feasible_range_pct(),
             "min_adaptive_range_180s_pct": self._min_adaptive_range_pct(),
@@ -526,6 +537,49 @@ class HitAndRunStrategy:
             "taker_buy_ratio_10s": buy_10s,
             "taker_buy_ratio_30s": buy_30s,
             "pressure": round(pressure, 4),
+        }
+
+    def _weak_neutral_short_gate(
+        self,
+        side: str,
+        snapshot: MarketRegimeSnapshot,
+        adaptive_gate: dict,
+        higher_timeframe_gate: dict,
+        local_execution_gate: dict,
+        entry_follow_through_gate: dict,
+    ) -> dict:
+        profile = str(higher_timeframe_gate.get("profile") or "")
+        applies = side == "short" and profile == "weak_or_neutral_htf"
+        enabled = self.settings.weak_neutral_short_gate_enabled
+        quality_score = float(adaptive_gate.get("quality_score") or 0.0)
+        follow_score = float(entry_follow_through_gate.get("score") or 0.0)
+        blockers: list[str] = []
+        if enabled and applies:
+            if quality_score < self.settings.weak_neutral_short_min_quality:
+                blockers.append("quality")
+            if snapshot.confidence < self.settings.weak_neutral_short_min_sequence_confidence:
+                blockers.append("sequence_confidence")
+            if follow_score < self.settings.weak_neutral_short_min_follow_score:
+                blockers.append("follow_score")
+            if not entry_follow_through_gate.get("strict_mandatory_confirmed"):
+                blockers.append("strict_follow_through")
+            if local_execution_gate.get("local_reversal_confirmed") is not True:
+                blockers.append("local_reversal")
+        return {
+            "enabled": enabled,
+            "applies": applies,
+            "allowed": not blockers,
+            "blocker": None if not blockers else "weak_neutral_short_quality",
+            "blockers": blockers,
+            "profile": profile,
+            "quality_score": quality_score,
+            "min_quality": self.settings.weak_neutral_short_min_quality,
+            "sequence_confidence": snapshot.confidence,
+            "min_sequence_confidence": self.settings.weak_neutral_short_min_sequence_confidence,
+            "follow_score": follow_score,
+            "min_follow_score": self.settings.weak_neutral_short_min_follow_score,
+            "strict_mandatory_confirmed": bool(entry_follow_through_gate.get("strict_mandatory_confirmed")),
+            "local_reversal_confirmed": local_execution_gate.get("local_reversal_confirmed"),
         }
 
     def _market_pressure(self, market: MarketState) -> float:
@@ -1234,6 +1288,9 @@ class HitAndRunStrategy:
         return_1h = float(frame_1h.get("return_pct") or 0.0)
         range_position_5m = frame_5m.get("range_position")
         range_position_1h = frame_1h.get("range_position")
+        pressure = self._market_pressure(market)
+        buy_10s = market.taker_buy_ratio_10s
+        buy_30s = market.taker_buy_ratio_30s
 
         five_minute_reclaim = (
             structure_5m in {"uptrend_breakout", "uptrend_pullback", "range_support_test"}
@@ -1246,8 +1303,25 @@ class HitAndRunStrategy:
             or return_1h >= 0.0
             or (range_position_1h is not None and range_position_1h >= 0.50 and trend_1h > -0.30)
         )
+        immediate_flow_agrees = (
+            buy_10s is not None
+            and buy_30s is not None
+            and buy_10s >= 0.70
+            and buy_30s >= 0.60
+            and pressure >= self.settings.local_reversal_pressure
+            and (market.return_60s_pct or 0.0) >= self.settings.local_reversal_return_60s_pct
+        )
+        one_hour_led_relief = (
+            one_hour_improving
+            and immediate_flow_agrees
+            and (
+                return_1h >= self.settings.counter_htf_bounce_1h_relief_return_pct
+                or structure_1h in {"balanced", "uptrend_breakout", "uptrend_pullback"}
+                or trend_1h >= 0.0
+            )
+        )
         return {
-            "allowed": bool(frame_5m and frame_1h and five_minute_reclaim and one_hour_improving),
+            "allowed": bool(frame_5m and frame_1h and one_hour_improving and (five_minute_reclaim or one_hour_led_relief)),
             "structure_5m": structure_5m,
             "trend_score_5m": round(trend_5m, 4),
             "range_position_5m": range_position_5m,
@@ -1255,8 +1329,11 @@ class HitAndRunStrategy:
             "trend_score_1h": round(trend_1h, 4),
             "return_1h_pct": return_1h,
             "range_position_1h": range_position_1h,
+            "pressure": round(pressure, 4),
+            "immediate_flow_agrees": immediate_flow_agrees,
             "five_minute_reclaim": five_minute_reclaim,
             "one_hour_improving": one_hour_improving,
+            "one_hour_led_relief": one_hour_led_relief,
         }
 
     def _local_execution_gate(self, side: str, market: MarketState, higher_timeframe_gate: dict) -> dict:
