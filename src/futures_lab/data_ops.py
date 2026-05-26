@@ -218,6 +218,108 @@ def summarize_regime_outcomes(settings: Settings) -> RegimeOutcomeSummary:
     return summary
 
 
+@dataclass
+class ExitShadowPolicySummary:
+    samples: int = 0
+    wins: int = 0
+    losses: int = 0
+    gross_pnl_usd: float = 0.0
+    fees_usd: float = 0.0
+    net_pnl_usd: float = 0.0
+    net_vs_fixed_usd: float = 0.0
+    improved_vs_fixed: int = 0
+    worsened_vs_fixed: int = 0
+    exit_reasons: dict[str, int] = field(default_factory=dict)
+
+    def model_dump(self) -> dict:
+        return {
+            "samples": self.samples,
+            "wins": self.wins,
+            "losses": self.losses,
+            "gross_pnl_usd": round(self.gross_pnl_usd, 4),
+            "fees_usd": round(self.fees_usd, 4),
+            "net_pnl_usd": round(self.net_pnl_usd, 4),
+            "net_vs_fixed_usd": round(self.net_vs_fixed_usd, 4),
+            "improved_vs_fixed": self.improved_vs_fixed,
+            "worsened_vs_fixed": self.worsened_vs_fixed,
+            "exit_reasons": self.exit_reasons,
+        }
+
+
+@dataclass
+class ExitShadowSummary:
+    data_dir: str
+    files: int = 0
+    rows: int = 0
+    rows_with_exit_shadow: int = 0
+    best_policy: dict[str, int] = field(default_factory=dict)
+    policies: dict[str, ExitShadowPolicySummary] = field(default_factory=dict)
+
+    def model_dump(self) -> dict:
+        return {
+            "data_dir": self.data_dir,
+            "files": self.files,
+            "rows": self.rows,
+            "rows_with_exit_shadow": self.rows_with_exit_shadow,
+            "best_policy": self.best_policy,
+            "policies": {name: summary.model_dump() for name, summary in self.policies.items()},
+        }
+
+
+def summarize_exit_shadow(settings: Settings) -> ExitShadowSummary:
+    summary = ExitShadowSummary(data_dir=str(settings.data_dir))
+    base = Path(settings.data_dir)
+    policy_reason_counts: dict[str, Counter[str]] = {}
+    best_policy: Counter[str] = Counter()
+
+    for directory in [base / "paper_trades", base / "shadow_trades"]:
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("*.jsonl")):
+            summary.files += 1
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if row.get("event") == "open":
+                        continue
+                    summary.rows += 1
+                    exit_shadow = row.get("exit_shadow") or {}
+                    policies = exit_shadow.get("policies") or {}
+                    if not policies:
+                        continue
+                    summary.rows_with_exit_shadow += 1
+                    if exit_shadow.get("best_policy"):
+                        best_policy[str(exit_shadow["best_policy"])] += 1
+                    for name, policy in policies.items():
+                        if not policy.get("closed"):
+                            continue
+                        policy_summary = summary.policies.setdefault(str(name), ExitShadowPolicySummary())
+                        reason_counts = policy_reason_counts.setdefault(str(name), Counter())
+                        net = float(policy.get("net_pnl_usd") or 0.0)
+                        policy_summary.samples += 1
+                        policy_summary.gross_pnl_usd += float(policy.get("gross_pnl_usd") or 0.0)
+                        policy_summary.fees_usd += float(policy.get("fees_usd") or 0.0)
+                        policy_summary.net_pnl_usd += net
+                        policy_summary.net_vs_fixed_usd += float(policy.get("net_vs_fixed_usd") or 0.0)
+                        if net > 0:
+                            policy_summary.wins += 1
+                        elif net < 0:
+                            policy_summary.losses += 1
+                        delta = float(policy.get("net_vs_fixed_usd") or 0.0)
+                        if delta > 0:
+                            policy_summary.improved_vs_fixed += 1
+                        elif delta < 0:
+                            policy_summary.worsened_vs_fixed += 1
+                        reason_counts[str(policy.get("exit_reason"))] += 1
+
+    summary.best_policy = dict(best_policy)
+    for name, counter in policy_reason_counts.items():
+        summary.policies[name].exit_reasons = dict(counter)
+    return summary
+
+
 def prune_raw(settings: Settings, older_than_hours: float, dry_run: bool = False) -> FileOperationSummary:
     raw_dir = Path(settings.data_dir) / "raw_ws"
     summary = FileOperationSummary(data_dir=str(settings.data_dir))

@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from futures_lab.config import Settings
-from futures_lab.data_ops import compress_raw, prune_raw, summarize_data, summarize_regime_outcomes
+from futures_lab.data_ops import compress_raw, prune_raw, summarize_data, summarize_exit_shadow, summarize_regime_outcomes
 
 
 def test_data_summary_compresses_and_prunes_raw_files(tmp_path):
@@ -60,3 +60,27 @@ def test_regime_outcome_summary_counts_targets_and_horizons(tmp_path):
     assert summary.early_follow_through == {"qualified": 1}
     assert summary.side_early_follow_through == {"short": {"qualified": 1}}
     assert summary.average_quality_score == 0.81
+
+
+def test_exit_shadow_summary_counts_policy_edges(tmp_path):
+    paper_dir = tmp_path / "paper_trades"
+    paper_dir.mkdir(parents=True)
+    path = paper_dir / "BTCUSDT_paper_trades_2026-05-26.jsonl"
+    path.write_text(
+        (
+            '{"exit_reason":"stop_loss","exit_shadow":{"best_policy":"time_decay","policies":{'
+            '"fixed_tp_stop":{"closed":true,"exit_reason":"actual_stop_loss","gross_pnl_usd":-45,"fees_usd":24,"net_pnl_usd":-69,"net_vs_fixed_usd":0},'
+            '"time_decay":{"closed":true,"exit_reason":"time_decay","gross_pnl_usd":-3,"fees_usd":24,"net_pnl_usd":-27,"net_vs_fixed_usd":42}'
+            "}}}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_exit_shadow(Settings(DATA_DIR=str(tmp_path)))
+
+    assert summary.rows == 1
+    assert summary.rows_with_exit_shadow == 1
+    assert summary.best_policy == {"time_decay": 1}
+    assert summary.policies["time_decay"].net_vs_fixed_usd == 42
+    assert summary.policies["time_decay"].improved_vs_fixed == 1
+    assert summary.policies["fixed_tp_stop"].exit_reasons == {"actual_stop_loss": 1}

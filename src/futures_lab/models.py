@@ -144,6 +144,7 @@ class PaperTrade(BaseModel):
     exit_reason: str
     opened_at: datetime
     closed_at: datetime
+    exit_shadow: dict[str, Any] = Field(default_factory=dict)
 
 
 class PaperState(BaseModel):

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from futures_lab.config import Settings
+from futures_lab.exit_shadow import ExitShadowEvaluator
 
 from futures_lab.models import (
     Decision,
@@ -22,6 +23,7 @@ class PaperBroker:
     trades_today: int = 0
     open_position: PaperPosition | None = None
     last_trade: PaperTrade | None = None
+    exit_shadow: ExitShadowEvaluator | None = None
     day: str = field(default_factory=lambda: date.today().isoformat())
 
     def state(self) -> PaperState:
@@ -42,6 +44,7 @@ class PaperBroker:
         self.trades_today = 0
         self.open_position = None
         self.last_trade = None
+        self.exit_shadow = None
         self.day = date.today().isoformat()
         return self.state()
 
@@ -63,6 +66,7 @@ class PaperBroker:
         stake = self.settings.stake_usd
         notional = stake * decision.leverage
         quantity = notional / decision.entry_price
+        actual_opened_at = opened_at or utc_now()
         self.open_position = PaperPosition(
             symbol=decision.symbol,
             side=side,
@@ -74,8 +78,16 @@ class PaperBroker:
             leverage=decision.leverage,
             take_profit_price=decision.take_profit_price,
             stop_loss_price=decision.stop_loss_price,
-            opened_at=opened_at or utc_now(),
+            opened_at=actual_opened_at,
             confidence=decision.confidence,
+        )
+        self.exit_shadow = ExitShadowEvaluator(
+            settings=self.settings,
+            symbol=decision.symbol,
+            side=side,
+            entry_price=decision.entry_price,
+            notional_usd=notional,
+            opened_at=actual_opened_at,
         )
         return self.open_position
 
@@ -90,6 +102,8 @@ class PaperBroker:
         pos = self.open_position
         current = timestamp or utc_now()
         self._update_excursion(pos, market.mid_price)
+        if self.exit_shadow is not None:
+            self.exit_shadow.mark(market, current)
         if pos.side == Side.long:
             if market.mid_price >= pos.take_profit_price:
                 return self.close(market.mid_price, "take_profit", closed_at=current)
@@ -137,6 +151,10 @@ class PaperBroker:
         gross = (exit_price - pos.entry_price) * pos.quantity * direction
         fees = (pos.notional_usd * 2) * (self.settings.taker_fee_bps / 10_000)
         net = gross - fees
+        actual_closed_at = closed_at or utc_now()
+        exit_shadow = {}
+        if self.exit_shadow is not None:
+            exit_shadow = self.exit_shadow.close_at_actual(exit_price, reason, actual_closed_at)
         trade = PaperTrade(
             symbol=pos.symbol,
             side=pos.side,
@@ -152,9 +170,11 @@ class PaperBroker:
             net_pnl_usd=net,
             exit_reason=reason,
             opened_at=pos.opened_at,
-            closed_at=closed_at or utc_now(),
+            closed_at=actual_closed_at,
+            exit_shadow=exit_shadow,
         )
         self.open_position = None
+        self.exit_shadow = None
         self.last_trade = trade
         self.realized_pnl_usd += net
         self.trades_today += 1
@@ -169,3 +189,4 @@ class PaperBroker:
         self.trades_today = 0
         self.open_position = None
         self.last_trade = None
+        self.exit_shadow = None

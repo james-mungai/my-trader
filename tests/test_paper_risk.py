@@ -73,6 +73,7 @@ def test_paper_fast_trade_hits_target_after_fees():
     assert trade.gross_pnl_usd == pytest.approx(position.notional_usd * (decision.target_move_pct or 0.0))
     assert trade.net_pnl_usd < trade.gross_pnl_usd
     assert broker.state().trades_today == 1
+    assert trade.exit_shadow["policies"]["fixed_tp_stop"]["exit_reason"] == "actual_take_profit"
 
 
 def test_risk_blocks_target_that_does_not_clear_round_trip_fees():
@@ -220,3 +221,27 @@ def test_paper_max_hold_can_close_position():
 
     assert trade is not None
     assert trade.exit_reason == "max_hold"
+
+
+def test_paper_trade_logs_exit_shadow_for_alternative_exit_policies():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        EXIT_SHADOW_TIME_DECAY_SECONDS=180,
+        ENABLE_FAST_FAILURE_EXIT=False,
+    )
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert broker.mark(
+        _market(99.99, return_60s_pct=-0.0002, taker_buy_ratio_10s=0.45),
+        timestamp=opened_at + timedelta(seconds=181),
+    ) is None
+    trade = broker.mark(_market(position.stop_loss_price), timestamp=opened_at + timedelta(seconds=240))
+
+    assert trade is not None
+    assert trade.exit_shadow["policies"]["time_decay"]["exit_reason"] == "time_decay"
+    assert trade.exit_shadow["policies"]["time_decay"]["net_pnl_usd"] > trade.exit_shadow["policies"]["fixed_tp_stop"]["net_pnl_usd"]

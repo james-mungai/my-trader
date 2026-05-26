@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from futures_lab.config import Settings
+from futures_lab.exit_shadow import ExitShadowEvaluator
 from futures_lab.models import Decision, MarketState, Side, utc_now
 
 
@@ -24,6 +25,7 @@ class ShadowPosition:
     source: str = "blocked_stateful_continuation"
     max_favorable_move_pct: float = 0.0
     max_adverse_move_pct: float = 0.0
+    exit_shadow: ExitShadowEvaluator | None = None
 
 
 @dataclass
@@ -42,6 +44,7 @@ class ShadowTradeTracker:
 
         self.opened_count += 1
         signal_id = f"shadow-{self.opened_count:06d}"
+        actual_opened_at = opened_at or decision.timestamp
         position = ShadowPosition(
             signal_id=signal_id,
             symbol=decision.symbol,
@@ -55,9 +58,17 @@ class ShadowTradeTracker:
             target_move_pct=float(signal["target_move_pct"]),
             stop_move_pct=float(signal["stop_move_pct"]),
             confidence=float(signal["confidence"]),
-            opened_at=opened_at or decision.timestamp,
+            opened_at=actual_opened_at,
             blocked_by=list(signal.get("blocked_by") or []),
             source=str(signal.get("source") or "blocked_stateful_continuation"),
+        )
+        position.exit_shadow = ExitShadowEvaluator(
+            settings=self.settings,
+            symbol=position.symbol,
+            side=position.side,
+            entry_price=position.entry_price,
+            notional_usd=position.notional_usd,
+            opened_at=actual_opened_at,
         )
         self.positions.append(position)
         return self._event("open", position)
@@ -75,6 +86,8 @@ class ShadowTradeTracker:
         current = timestamp or market.last_received_at or utc_now()
         for position in self.positions:
             self._update_excursion(position, market.mid_price)
+            if position.exit_shadow is not None:
+                position.exit_shadow.mark(market, current)
             reason = self._exit_reason(position, market.mid_price)
             if reason is None:
                 remaining.append(position)
@@ -89,6 +102,10 @@ class ShadowTradeTracker:
         if market is None or market.mid_price is None:
             return []
         current = timestamp or market.last_received_at or utc_now()
+        for position in self.positions:
+            self._update_excursion(position, market.mid_price)
+            if position.exit_shadow is not None:
+                position.exit_shadow.mark(market, current)
         closed = [self._close_event(position, market.mid_price, reason, current) for position in self.positions]
         self.positions = []
         return closed
@@ -115,6 +132,9 @@ class ShadowTradeTracker:
         self.closed_count += 1
         gross = self._gross_pnl(position, exit_price)
         fees = position.notional_usd * 2 * (self.settings.taker_fee_bps / 10_000)
+        exit_shadow = {}
+        if position.exit_shadow is not None:
+            exit_shadow = position.exit_shadow.close_at_actual(exit_price, reason, closed_at)
         return self._event(
             "close",
             position,
@@ -125,6 +145,7 @@ class ShadowTradeTracker:
                 "gross_pnl_usd": gross,
                 "fees_usd": fees,
                 "net_pnl_usd": gross - fees,
+                "exit_shadow": exit_shadow,
                 "max_favorable_move_pct": position.max_favorable_move_pct,
                 "max_adverse_move_pct": position.max_adverse_move_pct,
                 "time_in_trade_seconds": (closed_at - position.opened_at).total_seconds(),

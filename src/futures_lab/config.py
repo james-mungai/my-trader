@@ -129,6 +129,28 @@ class Settings(BaseSettings):
     entry_follow_through_counter_htf_bounce_override_score: float = Field(
         default=0.84, alias="ENTRY_FOLLOW_THROUGH_COUNTER_HTF_BOUNCE_OVERRIDE_SCORE"
     )
+    exit_shadow_enabled: bool = Field(default=True, alias="EXIT_SHADOW_ENABLED")
+    exit_shadow_fee_trail_activation_fee_multiple: float = Field(
+        default=1.50,
+        alias="EXIT_SHADOW_FEE_TRAIL_ACTIVATION_FEE_MULTIPLE",
+    )
+    exit_shadow_fee_trail_floor_fee_multiple: float = Field(
+        default=1.05,
+        alias="EXIT_SHADOW_FEE_TRAIL_FLOOR_FEE_MULTIPLE",
+    )
+    exit_shadow_mfe_trail_activation_pct: float = Field(default=0.0015, alias="EXIT_SHADOW_MFE_TRAIL_ACTIVATION_PCT")
+    exit_shadow_mfe_trail_distance_pct: float = Field(default=0.0010, alias="EXIT_SHADOW_MFE_TRAIL_DISTANCE_PCT")
+    exit_shadow_partial_take_profit_pct: float = Field(default=0.0010, alias="EXIT_SHADOW_PARTIAL_TAKE_PROFIT_PCT")
+    exit_shadow_partial_take_profit_alt_pct: float = Field(
+        default=0.0015,
+        alias="EXIT_SHADOW_PARTIAL_TAKE_PROFIT_ALT_PCT",
+    )
+    exit_shadow_partial_fraction: float = Field(default=0.50, alias="EXIT_SHADOW_PARTIAL_FRACTION")
+    exit_shadow_time_decay_seconds: int = Field(default=180, alias="EXIT_SHADOW_TIME_DECAY_SECONDS")
+    exit_shadow_time_decay_min_mfe_fee_multiple: float = Field(
+        default=1.25,
+        alias="EXIT_SHADOW_TIME_DECAY_MIN_MFE_FEE_MULTIPLE",
+    )
     regime_outcome_horizons_seconds: str = Field(default="15,30,60,180,300,900", alias="REGIME_OUTCOME_HORIZONS_SECONDS")
     regime_outcome_target_moves_pct: str = Field(default="0.001,0.002,0.0035,0.005", alias="REGIME_OUTCOME_TARGET_MOVES_PCT")
     regime_outcome_stop_moves_pct: str = Field(default="0.001,0.002", alias="REGIME_OUTCOME_STOP_MOVES_PCT")

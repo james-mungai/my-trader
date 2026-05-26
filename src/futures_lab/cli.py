@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from futures_lab.audit import AuditLog
 from futures_lab.config import Settings
-from futures_lab.data_ops import compress_raw, prune_raw, summarize_data, summarize_regime_outcomes
+from futures_lab.data_ops import compress_raw, prune_raw, summarize_data, summarize_exit_shadow, summarize_regime_outcomes
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.runtime import TradingRuntime
 
@@ -153,6 +153,8 @@ def main() -> None:
 
     sub.add_parser("regime-outcome-summary", help="Summarize deduped FSM regime outcome episodes.")
 
+    sub.add_parser("exit-shadow-summary", help="Summarize fee-aware shadow exit policy outcomes.")
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -187,6 +189,8 @@ def main() -> None:
         print(json.dumps(summarize_data(Settings(), largest=args.largest).model_dump(), indent=2))
     elif args.command == "regime-outcome-summary":
         print(json.dumps(summarize_regime_outcomes(Settings()).model_dump(), indent=2))
+    elif args.command == "exit-shadow-summary":
+        print(json.dumps(summarize_exit_shadow(Settings()).model_dump(), indent=2))
     elif args.command == "compress-raw":
         print(
             json.dumps(
