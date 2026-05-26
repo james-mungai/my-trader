@@ -104,6 +104,15 @@ class Settings(BaseSettings):
         alias="WEAK_NEUTRAL_SHORT_MIN_SEQUENCE_CONFIDENCE",
     )
     weak_neutral_short_min_follow_score: float = Field(default=0.95, alias="WEAK_NEUTRAL_SHORT_MIN_FOLLOW_SCORE")
+    weak_neutral_long_gate_enabled: bool = Field(default=True, alias="WEAK_NEUTRAL_LONG_GATE_ENABLED")
+    weak_neutral_long_min_quality: float = Field(default=0.82, alias="WEAK_NEUTRAL_LONG_MIN_QUALITY")
+    weak_neutral_long_min_sequence_confidence: float = Field(
+        default=0.94,
+        alias="WEAK_NEUTRAL_LONG_MIN_SEQUENCE_CONFIDENCE",
+    )
+    weak_neutral_long_min_follow_score: float = Field(default=0.98, alias="WEAK_NEUTRAL_LONG_MIN_FOLLOW_SCORE")
+    weak_neutral_long_min_1h_trend_score: float = Field(default=0.25, alias="WEAK_NEUTRAL_LONG_MIN_1H_TREND_SCORE")
+    weak_neutral_long_min_1h_return_pct: float = Field(default=0.0025, alias="WEAK_NEUTRAL_LONG_MIN_1H_RETURN_PCT")
     fee_edge_target_fee_buffer: float = Field(default=1.25, alias="FEE_EDGE_TARGET_FEE_BUFFER")
     duplicate_signal_suppression_seconds: int = Field(default=900, alias="DUPLICATE_SIGNAL_SUPPRESSION_SECONDS")
     duplicate_signal_min_quality_improvement: float = Field(default=0.04, alias="DUPLICATE_SIGNAL_MIN_QUALITY_IMPROVEMENT")

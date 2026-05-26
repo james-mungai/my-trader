@@ -213,6 +213,14 @@ class HitAndRunStrategy:
             local_execution_gate=local_execution_gate,
             entry_follow_through_gate=entry_follow_through_gate,
         )
+        weak_neutral_long_gate = self._weak_neutral_long_gate(
+            side=side,
+            market=market,
+            snapshot=snapshot,
+            adaptive_gate=adaptive_gate,
+            higher_timeframe_gate=higher_timeframe_gate,
+            entry_follow_through_gate=entry_follow_through_gate,
+        )
         blockers = []
         if not target_feasible and not adaptive_entry_allowed:
             blockers.append("target_feasibility")
@@ -232,6 +240,8 @@ class HitAndRunStrategy:
             blockers.append(entry_follow_through_gate["blocker"])
         if not weak_neutral_short_gate["allowed"]:
             blockers.append(weak_neutral_short_gate["blocker"])
+        if not weak_neutral_long_gate["allowed"]:
+            blockers.append(weak_neutral_long_gate["blocker"])
 
         row = {
             "confirmed": True,
@@ -253,6 +263,7 @@ class HitAndRunStrategy:
             "duplicate_signal_gate": duplicate_gate,
             "entry_follow_through_gate": entry_follow_through_gate,
             "weak_neutral_short_gate": weak_neutral_short_gate,
+            "weak_neutral_long_gate": weak_neutral_long_gate,
             "range_180s_pct": market.range_180s_pct,
             "min_required_range_180s_pct": self._min_target_feasible_range_pct(),
             "min_adaptive_range_180s_pct": self._min_adaptive_range_pct(),
@@ -313,6 +324,18 @@ class HitAndRunStrategy:
             return (
                 "stateful momentum confirmed but entry follow-through gate blocked early entry: "
                 f"confirmations={gate.get('confirmations')} score={gate.get('score')}"
+            )
+        if "weak_neutral_long_quality" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("weak_neutral_long_gate") or {}
+            return (
+                "stateful momentum confirmed but weak/neutral long gate blocked trade: "
+                f"quality={gate.get('quality_score')} trend_1h={gate.get('trend_score_1h')}"
+            )
+        if "weak_neutral_short_quality" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("weak_neutral_short_gate") or {}
+            return (
+                "stateful momentum confirmed but weak/neutral short gate blocked trade: "
+                f"quality={gate.get('quality_score')} follow={gate.get('follow_score')}"
             )
         return (
             "stateful momentum confirmed but score blocked: "
@@ -580,6 +603,66 @@ class HitAndRunStrategy:
             "min_follow_score": self.settings.weak_neutral_short_min_follow_score,
             "strict_mandatory_confirmed": bool(entry_follow_through_gate.get("strict_mandatory_confirmed")),
             "local_reversal_confirmed": local_execution_gate.get("local_reversal_confirmed"),
+        }
+
+    def _weak_neutral_long_gate(
+        self,
+        side: str,
+        market: MarketState,
+        snapshot: MarketRegimeSnapshot,
+        adaptive_gate: dict,
+        higher_timeframe_gate: dict,
+        entry_follow_through_gate: dict,
+    ) -> dict:
+        profile = str(higher_timeframe_gate.get("profile") or "")
+        applies = side == "long" and profile == "weak_or_neutral_htf"
+        enabled = self.settings.weak_neutral_long_gate_enabled
+        quality_score = float(adaptive_gate.get("quality_score") or 0.0)
+        follow_score = float(entry_follow_through_gate.get("score") or 0.0)
+        timeframes = market.higher_timeframe_context.get("timeframes", {}) if market.higher_timeframe_context else {}
+        frame_1h = timeframes.get("1h") or {}
+        structure_1h = str(frame_1h.get("structure") or "")
+        trend_1h = float(frame_1h.get("trend_score") or 0.0)
+        return_1h = float(frame_1h.get("return_pct") or 0.0)
+        range_position_1h = frame_1h.get("range_position")
+        one_hour_supportive = (
+            structure_1h in {"uptrend_breakout", "uptrend_pullback"}
+            or trend_1h >= self.settings.weak_neutral_long_min_1h_trend_score
+            or return_1h >= self.settings.weak_neutral_long_min_1h_return_pct
+        )
+        blockers: list[str] = []
+        if enabled and applies:
+            if quality_score < self.settings.weak_neutral_long_min_quality:
+                blockers.append("quality")
+            if snapshot.confidence < self.settings.weak_neutral_long_min_sequence_confidence:
+                blockers.append("sequence_confidence")
+            if follow_score < self.settings.weak_neutral_long_min_follow_score:
+                blockers.append("follow_score")
+            if not entry_follow_through_gate.get("strict_mandatory_confirmed"):
+                blockers.append("strict_follow_through")
+            if not one_hour_supportive:
+                blockers.append("one_hour_support")
+        return {
+            "enabled": enabled,
+            "applies": applies,
+            "allowed": not blockers,
+            "blocker": None if not blockers else "weak_neutral_long_quality",
+            "blockers": blockers,
+            "profile": profile,
+            "quality_score": quality_score,
+            "min_quality": self.settings.weak_neutral_long_min_quality,
+            "sequence_confidence": snapshot.confidence,
+            "min_sequence_confidence": self.settings.weak_neutral_long_min_sequence_confidence,
+            "follow_score": follow_score,
+            "min_follow_score": self.settings.weak_neutral_long_min_follow_score,
+            "strict_mandatory_confirmed": bool(entry_follow_through_gate.get("strict_mandatory_confirmed")),
+            "one_hour_supportive": one_hour_supportive,
+            "structure_1h": structure_1h,
+            "trend_score_1h": round(trend_1h, 4),
+            "min_trend_score_1h": self.settings.weak_neutral_long_min_1h_trend_score,
+            "return_1h_pct": return_1h,
+            "min_return_1h_pct": self.settings.weak_neutral_long_min_1h_return_pct,
+            "range_position_1h": range_position_1h,
         }
 
     def _market_pressure(self, market: MarketState) -> float:

@@ -606,6 +606,121 @@ def test_stateful_momentum_blocks_weak_neutral_short_without_stronger_quality():
     assert stateful_filter["weak_neutral_short_gate"]["allowed"] is False
 
 
+def test_stateful_momentum_blocks_weak_neutral_long_without_one_hour_support():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
+            WEAK_NEUTRAL_LONG_MIN_QUALITY=0.50,
+            WEAK_NEUTRAL_LONG_MIN_SEQUENCE_CONFIDENCE=0.50,
+            WEAK_NEUTRAL_LONG_MIN_FOLLOW_SCORE=0.50,
+        )
+    )
+    impulse = _market(
+        symbol="ETHUSDT",
+        range_position_180s=0.92,
+        return_15s_pct=0.00042,
+        return_60s_pct=0.0011,
+        return_180s_pct=0.0028,
+        taker_buy_ratio_10s=0.82,
+        taker_buy_ratio_30s=0.68,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={
+            "timeframes": {
+                "5m": {
+                    "structure": "uptrend_breakout",
+                    "trend_score": 0.72,
+                    "return_pct": 0.002,
+                    "range_position": 0.80,
+                    "taker_buy_ratio": 0.55,
+                },
+                "1h": {
+                    "structure": "balanced",
+                    "trend_score": 0.10,
+                    "return_pct": -0.001,
+                    "range_position": 0.78,
+                },
+            },
+        },
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.20,
+        higher_timeframe_bias_reason="weak mixed bias",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00040, "taker_buy_ratio_10s": 0.78}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00044, "taker_buy_ratio_10s": 0.82}))
+
+    assert confirmed.action == DecisionAction.wait
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert stateful_filter["higher_timeframe_gate"]["profile"] == "weak_or_neutral_htf"
+    assert "weak_neutral_long_quality" in stateful_filter["blockers"]
+    assert stateful_filter["weak_neutral_long_gate"]["allowed"] is False
+    assert "one_hour_support" in stateful_filter["weak_neutral_long_gate"]["blockers"]
+
+
+def test_stateful_momentum_allows_weak_neutral_long_with_one_hour_support():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
+            WEAK_NEUTRAL_LONG_MIN_QUALITY=0.50,
+            WEAK_NEUTRAL_LONG_MIN_SEQUENCE_CONFIDENCE=0.50,
+            WEAK_NEUTRAL_LONG_MIN_FOLLOW_SCORE=0.50,
+        )
+    )
+    impulse = _market(
+        symbol="ETHUSDT",
+        range_position_180s=0.92,
+        return_15s_pct=0.00042,
+        return_60s_pct=0.0011,
+        return_180s_pct=0.0028,
+        taker_buy_ratio_10s=0.82,
+        taker_buy_ratio_30s=0.68,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={
+            "timeframes": {
+                "5m": {
+                    "structure": "uptrend_breakout",
+                    "trend_score": 0.72,
+                    "return_pct": 0.002,
+                    "range_position": 0.80,
+                    "taker_buy_ratio": 0.55,
+                },
+                "1h": {
+                    "structure": "uptrend_pullback",
+                    "trend_score": 0.32,
+                    "return_pct": 0.003,
+                    "range_position": 0.78,
+                },
+            },
+        },
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.20,
+        higher_timeframe_bias_reason="weak mixed bias",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00040, "taker_buy_ratio_10s": 0.78}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00044, "taker_buy_ratio_10s": 0.82}))
+
+    assert confirmed.action == DecisionAction.propose_long
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert stateful_filter["higher_timeframe_gate"]["profile"] == "weak_or_neutral_htf"
+    assert stateful_filter["weak_neutral_long_gate"]["allowed"] is True
+    assert stateful_filter["weak_neutral_long_gate"]["one_hour_supportive"] is True
+
+
 def test_stateful_momentum_blocks_fee_thin_trade_when_quality_is_not_enough():
     strategy = HitAndRunStrategy(
         Settings(
