@@ -14,6 +14,7 @@ from futures_lab.data_ops import (
     summarize_regime_outcomes,
 )
 from futures_lab.replay import discover_raw_files, replay_files
+from futures_lab.readiness import evaluate_readiness
 from futures_lab.runtime import TradingRuntime
 
 
@@ -131,6 +132,28 @@ def replay_compare(
     print(json.dumps(rows, indent=2, default=str))
 
 
+def readiness_report(
+    pattern: str | None,
+    decision_interval_ms: int | None,
+    include_depth: bool,
+    book_ticker_min_interval_ms: int,
+    flatten_at_end: bool,
+) -> None:
+    settings = Settings()
+    try:
+        report = evaluate_readiness(
+            settings=settings,
+            pattern=pattern,
+            decision_interval_ms=decision_interval_ms,
+            include_depth=include_depth,
+            book_ticker_min_interval_ms=book_ticker_min_interval_ms,
+            flatten_at_end=flatten_at_end,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(report.model_dump(), indent=2, default=str))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Futures Lab CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -162,6 +185,13 @@ def main() -> None:
     compare_parser.add_argument("--book-ticker-min-interval-ms", type=int, default=100)
     compare_parser.add_argument("--flatten-at-end", action="store_true")
     compare_parser.add_argument("--hostile", action="store_true", help="Use hostile replay assumptions for every variant.")
+
+    readiness_parser = sub.add_parser("readiness-report", help="Evaluate live-readiness gates using normal and hostile replay.")
+    readiness_parser.add_argument("--pattern", default=None, help="Glob under data/raw_ws.")
+    readiness_parser.add_argument("--decision-interval-ms", type=int, default=None)
+    readiness_parser.add_argument("--include-depth", action="store_true")
+    readiness_parser.add_argument("--book-ticker-min-interval-ms", type=int, default=100)
+    readiness_parser.add_argument("--flatten-at-end", action="store_true")
 
     data_summary_parser = sub.add_parser("data-summary", help="Summarize recon data storage.")
     data_summary_parser.add_argument("--largest", type=int, default=20)
@@ -203,6 +233,14 @@ def main() -> None:
             book_ticker_min_interval_ms=args.book_ticker_min_interval_ms,
             flatten_at_end=args.flatten_at_end,
             hostile=args.hostile,
+        )
+    elif args.command == "readiness-report":
+        readiness_report(
+            pattern=args.pattern,
+            decision_interval_ms=args.decision_interval_ms,
+            include_depth=args.include_depth,
+            book_ticker_min_interval_ms=args.book_ticker_min_interval_ms,
+            flatten_at_end=args.flatten_at_end,
         )
     elif args.command == "data-summary":
         print(json.dumps(summarize_data(Settings(), largest=args.largest).model_dump(), indent=2))

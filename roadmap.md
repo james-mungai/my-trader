@@ -194,6 +194,20 @@ No real-money execution until all of these are true:
 - [ ] Paper/demo fills are close enough to simulated fills.
 - [ ] Max drawdown remains acceptable under 2x worse slippage.
 
+## Stage 10 - Readiness Evaluation Harness
+
+Goal: turn the live-readiness gates into repeatable reports instead of manual judgment.
+
+- [x] Add a command that runs normal and hostile replay on the same raw data.
+- [x] Report pass/fail/insufficient-data status for fee-tier and hostile replay PnL.
+- [x] Report accepted-vs-rejected and high-score-vs-low-score candidate quality.
+- [x] Keep live-readiness gates unchecked until enough real replay evidence passes.
+
+Acceptance:
+
+- [x] `futures-lab readiness-report` emits machine-readable JSON.
+- [x] Tests cover passing, failing, and insufficient-data readiness gates.
+
 ## Current Running Experiment
 
 - [ ] Analyze `futures-lab-recon_16h_eth_mfe_exit_20260527_091309` after completion.
