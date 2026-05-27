@@ -153,12 +153,14 @@ class EdgeRouter:
     def _liquidation_continuation_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:
         relevant_liq = self._continuation_liquidation_notional(market, side)
         liq_score = min(1.0, relevant_liq / 250_000)
+        phase_score = self._liquidation_phase_score(market, side, {"liquidation_impulse", "cascade_continuation"})
         signed = self._signed_features(market, side)
         score = self._bounded(
-            0.35 * liq_score
+            0.25 * liq_score
+            + 0.25 * phase_score
             + 0.25 * self._positive_unit(signed["ofi_1s"])
-            + 0.20 * self._positive_unit(signed["aggression_1s"])
-            + 0.20 * self._positive_unit(signed["depth_pressure"])
+            + 0.15 * self._positive_unit(signed["aggression_1s"])
+            + 0.10 * self._positive_unit(signed["depth_pressure"])
         )
         candidate = self._build_candidate(
             market=market,
@@ -169,22 +171,31 @@ class EdgeRouter:
             stop_bps=self.settings.fast_stop_move_pct * 10_000,
             max_hold_ms=self.settings.edge_router_liquidation_max_hold_ms,
             score=score,
-            reasons=[f"liquidation_notional={relevant_liq}", "forced-flow continuation proxy"],
+            reasons=[
+                f"liquidation_notional={relevant_liq}",
+                f"liquidation_phase={market.liquidation_phase}",
+                f"liquidation_phase_side={market.liquidation_phase_side}",
+                "forceOrder treated as sampled largest-pulse event flag",
+            ],
         )
         if relevant_liq <= 0:
             return self._with_blocker(candidate, "no_liquidation_pulse")
+        if phase_score <= 0:
+            return self._with_blocker(candidate, "liquidation_phase_not_continuation")
         return candidate
 
     def _liquidation_exhaustion_bounce_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:
         relevant_liq = self._exhaustion_liquidation_notional(market, side)
         liq_score = min(1.0, relevant_liq / 250_000)
+        phase_score = self._liquidation_phase_score(market, side, {"exhaustion_candidate", "reclaim_or_failed_reclaim"})
         signed = self._signed_features(market, side)
         score = self._bounded(
-            0.30 * liq_score
-            + 0.25 * self._positive_unit(signed["microprice_pressure"])
-            + 0.20 * self._positive_unit(signed["vamp_pressure"])
-            + 0.15 * self._positive_unit(signed["refill_pressure"])
-            + 0.10 * self._positive_unit(signed["ofi_1s"])
+            0.20 * liq_score
+            + 0.30 * phase_score
+            + 0.18 * self._positive_unit(signed["microprice_pressure"])
+            + 0.14 * self._positive_unit(signed["vamp_pressure"])
+            + 0.12 * self._positive_unit(signed["refill_pressure"])
+            + 0.06 * self._positive_unit(signed["ofi_1s"])
         )
         candidate = self._build_candidate(
             market=market,
@@ -195,10 +206,18 @@ class EdgeRouter:
             stop_bps=max(8.0, self.settings.fast_stop_move_pct * 10_000 * 0.8),
             max_hold_ms=self.settings.edge_router_liquidation_max_hold_ms,
             score=score,
-            reasons=[f"exhaustion_liquidation_notional={relevant_liq}", "delayed bounce proxy"],
+            reasons=[
+                f"exhaustion_liquidation_notional={relevant_liq}",
+                f"liquidation_phase={market.liquidation_phase}",
+                f"liquidation_phase_side={market.liquidation_phase_side}",
+                "forceOrder treated as sampled largest-pulse event flag",
+                "delayed bounce requires exhaustion/reclaim phase",
+            ],
         )
         if relevant_liq <= 0:
             return self._with_blocker(candidate, "no_exhaustion_pulse")
+        if phase_score <= 0:
+            return self._with_blocker(candidate, "cascade_not_exhausted")
         return candidate
 
     def _build_candidate(
@@ -324,6 +343,13 @@ class EdgeRouter:
         if side == Side.long:
             return market.long_liquidation_notional_30s or 0.0
         return market.short_liquidation_notional_30s or 0.0
+
+    def _liquidation_phase_score(self, market: MarketState, side: Side, allowed_phases: set[str]) -> float:
+        if market.liquidation_phase not in allowed_phases:
+            return 0.0
+        if market.liquidation_phase_side != side.value:
+            return 0.0
+        return self._bounded(market.liquidation_phase_confidence)
 
     def _with_blocker(self, candidate: EdgeCandidate, blocker: str) -> EdgeCandidate:
         return self._with_blockers(candidate, [blocker])

@@ -95,6 +95,10 @@ class MarketState(BaseModel):
     long_liquidation_notional_30s: float | None = None
     short_liquidation_notional_30s: float | None = None
     liquidation_buy_ratio_30s: float | None = None
+    liquidation_phase: str = "normal"
+    liquidation_phase_side: str = "none"
+    liquidation_phase_confidence: float = 0.0
+    liquidation_phase_context: dict[str, Any] = Field(default_factory=dict)
     last_stream_event_type: str | None = None
     exchange_event_lag_ms: float | None = None
     avg_event_lag_30s_ms: float | None = None

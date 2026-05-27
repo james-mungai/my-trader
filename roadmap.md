@@ -114,16 +114,16 @@ Acceptance:
 
 Goal: stop treating liquidation prints as complete flow and instead detect forced-flow phase.
 
-- [ ] Treat Binance `forceOrder` as largest-pulse event flags, not full volume truth.
-- [ ] Add liquidation states: normal, pressure_building, liquidation_impulse, cascade_continuation, exhaustion_candidate, reclaim_or_failed_reclaim.
-- [ ] Combine liquidation pulse, mark-last basis, OFI, taker aggression, depth evaporation/refill, spread expansion/compression, and OI change.
-- [ ] Prefer cascade continuation while forced flow accelerates.
-- [ ] Allow countertrend bounce only after exhaustion/reclaim conditions prove out.
+- [x] Treat Binance `forceOrder` as largest-pulse event flags, not full volume truth.
+- [x] Add liquidation states: normal, pressure_building, liquidation_impulse, cascade_continuation, exhaustion_candidate, reclaim_or_failed_reclaim.
+- [x] Combine liquidation pulse, mark-last basis, OFI, taker aggression, depth evaporation/refill, spread expansion/compression, and OI change.
+- [x] Prefer cascade continuation while forced flow accelerates.
+- [x] Allow countertrend bounce only after exhaustion/reclaim conditions prove out.
 
 Acceptance:
 
-- [ ] Tests cover sell-cascade continuation and delayed long-bounce eligibility.
-- [ ] Recon logs show phase transitions and rejected early bounces.
+- [x] Tests cover sell-cascade continuation and delayed long-bounce eligibility.
+- [x] Recon logs show phase transitions and rejected early bounces.
 
 ## Stage 6 - Triple-Barrier Outcome Labels
 

@@ -136,6 +136,61 @@ def test_liquidation_continuation_requires_relevant_pulse():
     assert "no_liquidation_pulse" not in allowed["blockers"]
 
 
+def test_liquidation_router_prefers_sell_cascade_short_continuation():
+    router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
+
+    result = router.evaluate(
+        _market(
+            long_liquidation_notional_30s=600_000,
+            liquidation_phase="cascade_continuation",
+            liquidation_phase_side="short",
+            liquidation_phase_confidence=0.92,
+        )
+    )
+    continuation = next(
+        candidate for candidate in result["candidates"] if candidate["strategy"] == "liquidation_continuation_short"
+    )
+    early_bounce = next(
+        candidate for candidate in result["candidates"] if candidate["strategy"] == "liquidation_exhaustion_bounce_long"
+    )
+
+    assert continuation["viable"] is True
+    assert "liquidation_phase_not_continuation" not in continuation["blockers"]
+    assert "cascade_not_exhausted" in early_bounce["blockers"]
+
+
+def test_liquidation_router_allows_delayed_long_bounce_after_reclaim():
+    router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
+
+    result = router.evaluate(
+        _market(
+            higher_timeframe_bias_side="neutral",
+            higher_timeframe_bias_strength=0.0,
+            long_liquidation_notional_30s=600_000,
+            liquidation_phase="reclaim_or_failed_reclaim",
+            liquidation_phase_side="long",
+            liquidation_phase_confidence=0.90,
+            order_flow_imbalance_1s=0.74,
+            taker_aggression_imbalance_1s=0.70,
+            microprice_mid_bps=0.40,
+            vamp_mid_bps=0.35,
+            depth_imbalance_top5=0.55,
+            bid_depth_refill_rate_5s=0.25,
+            ask_depth_evaporation_rate_5s=0.12,
+        )
+    )
+    bounce = next(
+        candidate for candidate in result["candidates"] if candidate["strategy"] == "liquidation_exhaustion_bounce_long"
+    )
+    continuation = next(
+        candidate for candidate in result["candidates"] if candidate["strategy"] == "liquidation_continuation_short"
+    )
+
+    assert bounce["viable"] is True
+    assert "cascade_not_exhausted" not in bounce["blockers"]
+    assert "liquidation_phase_not_continuation" in continuation["blockers"]
+
+
 def test_baseline_candidate_is_logged_with_router_candidates():
     router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
     baseline = BaselineCandidateInput(

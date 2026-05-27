@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from futures_lab.config import Settings
+from futures_lab.liquidation_phase import classify_liquidation_phase
 from futures_lab.models import MarketState, Regime
 
 
@@ -272,6 +273,11 @@ class MarketStateBook:
             higher_timeframe_bias_strength=self._higher_timeframe_bias_strength(),
             higher_timeframe_bias_reason=self._higher_timeframe_bias_reason(),
         )
+        liquidation_phase = classify_liquidation_phase(state, self.settings)
+        state.liquidation_phase = liquidation_phase.phase
+        state.liquidation_phase_side = liquidation_phase.side
+        state.liquidation_phase_confidence = liquidation_phase.confidence
+        state.liquidation_phase_context = liquidation_phase.model_dump()
         state.regime = self._classify_regime(state)
         return state
 

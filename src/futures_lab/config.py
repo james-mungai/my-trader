@@ -208,6 +208,23 @@ class Settings(BaseSettings):
         default=1.2,
         alias="TAKER_IMPULSE_TRAIL_ACTIVATION_COST_MULTIPLE",
     )
+    liquidation_phase_pressure_notional: float = Field(default=50_000.0, alias="LIQUIDATION_PHASE_PRESSURE_NOTIONAL")
+    liquidation_phase_impulse_notional: float = Field(default=250_000.0, alias="LIQUIDATION_PHASE_IMPULSE_NOTIONAL")
+    liquidation_phase_min_pressure_building: float = Field(
+        default=0.62,
+        alias="LIQUIDATION_PHASE_MIN_PRESSURE_BUILDING",
+    )
+    liquidation_phase_min_continuation_pressure: float = Field(
+        default=0.70,
+        alias="LIQUIDATION_PHASE_MIN_CONTINUATION_PRESSURE",
+    )
+    liquidation_phase_min_exhaustion_pressure: float = Field(
+        default=0.68,
+        alias="LIQUIDATION_PHASE_MIN_EXHAUSTION_PRESSURE",
+    )
+    liquidation_phase_min_refill_pressure: float = Field(default=0.12, alias="LIQUIDATION_PHASE_MIN_REFILL_PRESSURE")
+    liquidation_phase_mark_basis_bps: float = Field(default=2.0, alias="LIQUIDATION_PHASE_MARK_BASIS_BPS")
+    liquidation_phase_oi_change_pct: float = Field(default=0.0015, alias="LIQUIDATION_PHASE_OI_CHANGE_PCT")
     daily_target_usd: float = Field(default=150.0, alias="DAILY_TARGET_USD")
     daily_max_loss_usd: float = Field(default=75.0, alias="DAILY_MAX_LOSS_USD")
     max_trades_per_day: int = Field(default=0, alias="MAX_TRADES_PER_DAY")
