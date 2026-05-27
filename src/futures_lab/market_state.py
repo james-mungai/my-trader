@@ -25,6 +25,26 @@ class FlowPoint:
 
 
 @dataclass(frozen=True)
+class OrderFlowImbalancePoint:
+    ts: datetime
+    imbalance: float
+    magnitude: float
+
+
+@dataclass(frozen=True)
+class SpreadPoint:
+    ts: datetime
+    spread_bps: float
+
+
+@dataclass(frozen=True)
+class DepthPoint:
+    ts: datetime
+    bid_qty: float
+    ask_qty: float
+
+
+@dataclass(frozen=True)
 class LiquidationPoint:
     ts: datetime
     side: str
@@ -61,6 +81,9 @@ class MarketStateBook:
     open_interest_updated_at: datetime | None = None
     prices: deque[PricePoint] = field(default_factory=deque)
     flows: deque[FlowPoint] = field(default_factory=deque)
+    order_flow_imbalances: deque[OrderFlowImbalancePoint] = field(default_factory=deque)
+    spreads: deque[SpreadPoint] = field(default_factory=deque)
+    depth_points: deque[DepthPoint] = field(default_factory=deque)
     liquidations: deque[LiquidationPoint] = field(default_factory=deque)
     latencies: deque[LatencyPoint] = field(default_factory=deque)
     open_interest_points: deque[OpenInterestPoint] = field(default_factory=deque)
@@ -87,10 +110,16 @@ class MarketStateBook:
         event_type = self._event_type(payload)
         self.last_stream_event_type = event_type
         if event_type == "bookTicker":
-            self.best_bid = float(payload["b"])
-            self.best_ask = float(payload["a"])
-            self.best_bid_qty = float(payload["B"])
-            self.best_ask_qty = float(payload["A"])
+            bid = float(payload["b"])
+            ask = float(payload["a"])
+            bid_qty = float(payload["B"])
+            ask_qty = float(payload["A"])
+            self._append_order_flow_imbalance(received_at, bid, ask, bid_qty, ask_qty)
+            self.best_bid = bid
+            self.best_ask = ask
+            self.best_bid_qty = bid_qty
+            self.best_ask_qty = ask_qty
+            self._append_spread(received_at)
             mid = self.mid_price
             if mid is not None:
                 self.prices.append(PricePoint(ts=received_at, price=mid))
@@ -115,6 +144,7 @@ class MarketStateBook:
                 self.prices.append(PricePoint(ts=received_at, price=self.mark_price))
         elif event_type in {"depthUpdate", "partialDepth"}:
             self._ingest_depth(payload)
+            self._append_depth_point(received_at)
         elif event_type == "forceOrder":
             order = payload.get("o", {})
             price = float(order.get("p") or order.get("ap") or 0.0)
@@ -182,8 +212,12 @@ class MarketStateBook:
             depth_ask_wall_ratio_top5=self._depth_wall_ratio(self.depth_asks, reverse=False),
             mid_price=mid,
             spread_bps=spread_bps,
+            spread_bps_avg_5s=self._spread_avg(current, 5),
+            spread_bps_std_5s=self._spread_std(current, 5),
+            spread_bps_max_5s=self._spread_max(current, 5),
             last_trade_price=self.last_trade_price,
             mark_price=self.mark_price,
+            mark_last_basis_bps=self._mark_last_basis_bps(),
             funding_rate=self.funding_rate,
             open_interest=self.open_interest,
             open_interest_age_seconds=(
@@ -201,9 +235,25 @@ class MarketStateBook:
             range_high_180s=range_high,
             range_low_180s=range_low,
             range_position_180s=range_position,
+            order_flow_imbalance_250ms=self._order_flow_imbalance(current, 0.250),
+            order_flow_imbalance_1s=self._order_flow_imbalance(current, 1),
+            order_flow_imbalance_5s=self._order_flow_imbalance(current, 5),
+            taker_aggression_imbalance_1s=self._taker_aggression_imbalance(current, 1),
+            taker_aggression_imbalance_5s=self._taker_aggression_imbalance(current, 5),
+            taker_aggression_imbalance_15s=self._taker_aggression_imbalance(current, 15),
             taker_buy_ratio_10s=self._taker_buy_ratio(current, 10),
             taker_buy_ratio_30s=self._taker_buy_ratio(current, 30),
             book_imbalance_top=self._book_imbalance_top(),
+            microprice=self._microprice(),
+            microprice_mid_bps=self._price_mid_bps(self._microprice(), mid),
+            vamp_price_top=self._vamp_price(),
+            vamp_mid_bps=self._price_mid_bps(self._vamp_price(), mid),
+            weighted_depth_price_top=self._weighted_depth_price(),
+            weighted_depth_mid_bps=self._price_mid_bps(self._weighted_depth_price(), mid),
+            bid_depth_refill_rate_5s=self._depth_change_rate(current, 5, side="bid", positive=True),
+            ask_depth_refill_rate_5s=self._depth_change_rate(current, 5, side="ask", positive=True),
+            bid_depth_evaporation_rate_5s=self._depth_change_rate(current, 5, side="bid", positive=False),
+            ask_depth_evaporation_rate_5s=self._depth_change_rate(current, 5, side="ask", positive=False),
             liquidation_notional_30s=self._liquidation_notional(current, 30),
             long_liquidation_notional_30s=self._liquidation_notional(current, 30, side="SELL"),
             short_liquidation_notional_30s=self._liquidation_notional(current, 30, side="BUY"),
@@ -231,6 +281,12 @@ class MarketStateBook:
             self.prices.popleft()
         while self.flows and self.flows[0].ts.timestamp() < cutoff:
             self.flows.popleft()
+        while self.order_flow_imbalances and self.order_flow_imbalances[0].ts.timestamp() < cutoff:
+            self.order_flow_imbalances.popleft()
+        while self.spreads and self.spreads[0].ts.timestamp() < cutoff:
+            self.spreads.popleft()
+        while self.depth_points and self.depth_points[0].ts.timestamp() < cutoff:
+            self.depth_points.popleft()
         while self.liquidations and self.liquidations[0].ts.timestamp() < cutoff:
             self.liquidations.popleft()
         while self.latencies and self.latencies[0].ts.timestamp() < cutoff:
@@ -269,6 +325,63 @@ class MarketStateBook:
         levels = max(1, self.settings.depth_levels)
         self.depth_bids = dict(sorted(self.depth_bids.items(), reverse=True)[:levels])
         self.depth_asks = dict(sorted(self.depth_asks.items())[:levels])
+
+    def _append_order_flow_imbalance(
+        self,
+        ts: datetime,
+        bid: float,
+        ask: float,
+        bid_qty: float,
+        ask_qty: float,
+    ) -> None:
+        if (
+            self.best_bid is None
+            or self.best_ask is None
+            or self.best_bid_qty is None
+            or self.best_ask_qty is None
+        ):
+            return
+        imbalance = 0.0
+        magnitude = 0.0
+        if bid > self.best_bid:
+            imbalance += bid_qty
+            magnitude += bid_qty
+        elif bid == self.best_bid:
+            delta = bid_qty - self.best_bid_qty
+            imbalance += delta
+            magnitude += abs(delta)
+        else:
+            imbalance -= self.best_bid_qty
+            magnitude += self.best_bid_qty
+
+        if ask < self.best_ask:
+            imbalance -= ask_qty
+            magnitude += ask_qty
+        elif ask == self.best_ask:
+            delta = self.best_ask_qty - ask_qty
+            imbalance += delta
+            magnitude += abs(delta)
+        else:
+            imbalance += self.best_ask_qty
+            magnitude += self.best_ask_qty
+
+        if magnitude > 0:
+            self.order_flow_imbalances.append(
+                OrderFlowImbalancePoint(ts=ts, imbalance=imbalance, magnitude=magnitude)
+            )
+
+    def _append_spread(self, ts: datetime) -> None:
+        mid = self.mid_price
+        if mid is None or mid <= 0 or self.best_bid is None or self.best_ask is None:
+            return
+        self.spreads.append(SpreadPoint(ts=ts, spread_bps=((self.best_ask - self.best_bid) / mid) * 10_000))
+
+    def _append_depth_point(self, ts: datetime) -> None:
+        bid_qty = self._depth_qty(self.depth_bids, reverse=True)
+        ask_qty = self._depth_qty(self.depth_asks, reverse=False)
+        if bid_qty is None or ask_qty is None:
+            return
+        self.depth_points.append(DepthPoint(ts=ts, bid_qty=bid_qty, ask_qty=ask_qty))
 
     def _prices_since(self, current: datetime, seconds: int) -> list[PricePoint]:
         cutoff = current.timestamp() - seconds
@@ -319,6 +432,33 @@ class MarketStateBook:
             return None
         return buy / total
 
+    def _taker_aggression_imbalance(self, current: datetime, seconds: int) -> float | None:
+        cutoff = current.timestamp() - seconds
+        buy = 0.0
+        sell = 0.0
+        for point in self.flows:
+            if point.ts.timestamp() < cutoff:
+                continue
+            buy += point.taker_buy_qty
+            sell += point.taker_sell_qty
+        total = buy + sell
+        if total <= 0:
+            return None
+        return (buy - sell) / total
+
+    def _order_flow_imbalance(self, current: datetime, seconds: float) -> float | None:
+        cutoff = current.timestamp() - seconds
+        imbalance = 0.0
+        magnitude = 0.0
+        for point in self.order_flow_imbalances:
+            if point.ts.timestamp() < cutoff:
+                continue
+            imbalance += point.imbalance
+            magnitude += point.magnitude
+        if magnitude <= 0:
+            return None
+        return max(-1.0, min(1.0, imbalance / magnitude))
+
     def _book_imbalance_top(self) -> float | None:
         if self.best_bid_qty is None or self.best_ask_qty is None:
             return None
@@ -351,6 +491,91 @@ class MarketStateBook:
         if total <= 0:
             return None
         return max(levels) / total
+
+    def _spread_values_since(self, current: datetime, seconds: int) -> list[float]:
+        cutoff = current.timestamp() - seconds
+        return [point.spread_bps for point in self.spreads if point.ts.timestamp() >= cutoff]
+
+    def _spread_avg(self, current: datetime, seconds: int) -> float | None:
+        values = self._spread_values_since(current, seconds)
+        if not values:
+            return None
+        return sum(values) / len(values)
+
+    def _spread_std(self, current: datetime, seconds: int) -> float | None:
+        values = self._spread_values_since(current, seconds)
+        if len(values) < 2:
+            return None
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+        return math.sqrt(variance)
+
+    def _spread_max(self, current: datetime, seconds: int) -> float | None:
+        values = self._spread_values_since(current, seconds)
+        if not values:
+            return None
+        return max(values)
+
+    def _microprice(self) -> float | None:
+        if (
+            self.best_bid is None
+            or self.best_ask is None
+            or self.best_bid_qty is None
+            or self.best_ask_qty is None
+        ):
+            return None
+        total = self.best_bid_qty + self.best_ask_qty
+        if total <= 0:
+            return None
+        return ((self.best_bid * self.best_ask_qty) + (self.best_ask * self.best_bid_qty)) / total
+
+    def _vamp_price(self) -> float | None:
+        bids = sorted(self.depth_bids.items(), reverse=True)[: max(1, self.settings.depth_levels)]
+        asks = sorted(self.depth_asks.items())[: max(1, self.settings.depth_levels)]
+        if not bids or not asks:
+            return self._microprice()
+        numerator = 0.0
+        denominator = 0.0
+        for (bid_price, bid_qty), (ask_price, ask_qty) in zip(bids, asks):
+            numerator += bid_price * ask_qty + ask_price * bid_qty
+            denominator += bid_qty + ask_qty
+        if denominator <= 0:
+            return None
+        return numerator / denominator
+
+    def _weighted_depth_price(self) -> float | None:
+        levels = list(sorted(self.depth_bids.items(), reverse=True)[: max(1, self.settings.depth_levels)])
+        levels += list(sorted(self.depth_asks.items())[: max(1, self.settings.depth_levels)])
+        if not levels:
+            return self.mid_price
+        denominator = sum(qty for _, qty in levels)
+        if denominator <= 0:
+            return None
+        return sum(price * qty for price, qty in levels) / denominator
+
+    def _price_mid_bps(self, price: float | None, mid: float | None) -> float | None:
+        if price is None or mid is None or mid <= 0:
+            return None
+        return ((price - mid) / mid) * 10_000
+
+    def _depth_change_rate(self, current: datetime, seconds: int, side: str, positive: bool) -> float | None:
+        cutoff = current.timestamp() - seconds
+        points = [point for point in self.depth_points if point.ts.timestamp() >= cutoff]
+        if len(points) < 2:
+            return None
+        first = points[0].bid_qty if side == "bid" else points[0].ask_qty
+        last = points[-1].bid_qty if side == "bid" else points[-1].ask_qty
+        elapsed = max(0.001, (points[-1].ts - points[0].ts).total_seconds())
+        if first <= 0:
+            return None
+        change = (last - first) / first
+        directional_change = max(0.0, change) if positive else max(0.0, -change)
+        return directional_change / elapsed
+
+    def _mark_last_basis_bps(self) -> float | None:
+        if self.mark_price is None or self.last_trade_price is None or self.last_trade_price <= 0:
+            return None
+        return ((self.mark_price - self.last_trade_price) / self.last_trade_price) * 10_000
 
     def _liquidation_notional(self, current: datetime, seconds: int, side: str | None = None) -> float | None:
         cutoff = current.timestamp() - seconds

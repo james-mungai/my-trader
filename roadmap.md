@@ -17,28 +17,28 @@ Exit layer             -> fixed baseline plus state-conditioned exits
 ## Stage 0 - Project Ledger
 
 - [x] Create this roadmap and start the microstructure revamp branch.
-- [ ] Keep each implementation substage as its own commit.
-- [ ] Update this roadmap whenever a substage is completed or deliberately deferred.
+- [x] Keep each implementation substage as its own commit.
+- [x] Update this roadmap whenever a substage is completed or deliberately deferred.
 
 ## Stage 1 - Microstructure Feature Engine
 
 Goal: make the next-second to next-minute state visible before changing entry logic.
 
-- [ ] Add event-time order-flow imbalance windows: `250ms`, `1s`, `5s`.
-- [ ] Add taker aggression imbalance windows: `1s`, `5s`, `15s`.
-- [ ] Add microprice and `microprice_mid_bps`.
-- [ ] Add VAMP / weighted-depth price for available top depth levels.
-- [ ] Add `vamp_mid_bps` and depth-weighted fair-value deviation.
-- [ ] Add spread stability metrics over short windows.
-- [ ] Add bid/ask depth refill and evaporation rates.
-- [ ] Add mark-last dislocation in bps.
-- [ ] Add feature fields to `MarketState`, feature logs, decision evidence, and tests.
-- [ ] Keep the first pass shadow/log-only. No entry loosening in this stage.
+- [x] Add event-time order-flow imbalance windows: `250ms`, `1s`, `5s`.
+- [x] Add taker aggression imbalance windows: `1s`, `5s`, `15s`.
+- [x] Add microprice and `microprice_mid_bps`.
+- [x] Add VAMP / weighted-depth price for available top depth levels.
+- [x] Add `vamp_mid_bps` and depth-weighted fair-value deviation.
+- [x] Add spread stability metrics over short windows.
+- [x] Add bid/ask depth refill and evaporation rates.
+- [x] Add mark-last dislocation in bps.
+- [x] Add feature fields to `MarketState`, feature logs, decision evidence, and tests.
+- [x] Keep the first pass shadow/log-only. No entry loosening in this stage.
 
 Acceptance:
 
-- [ ] Unit tests cover OFI, microprice, VAMP, spread stability, refill, and mark-last basis.
-- [ ] A short Docker watch/recon run writes the new fields without breaking existing logs.
+- [x] Unit tests cover OFI, microprice, VAMP, spread stability, refill, and mark-last basis.
+- [x] A short Docker watch/recon run writes the new fields without breaking existing logs.
 
 ## Stage 2 - Effective Cost Model
 
