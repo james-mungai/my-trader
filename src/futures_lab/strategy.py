@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 
 from futures_lab.config import Settings
 from futures_lab.costs import estimate_effective_cost
+from futures_lab.cross_market import cross_market_gate
 from futures_lab.edge_router import BaselineCandidateInput, EdgeRouter
 from futures_lab.markov import MarketRegimeSnapshot, MarketStateMachine
 from futures_lab.models import Decision, DecisionAction, MarketState, Regime, Side, TradeMode
@@ -68,6 +69,7 @@ class HitAndRunStrategy:
         )
         long_score, short_score = self._apply_session_bias(long_score, short_score, evidence)
         long_score, short_score = self._apply_higher_timeframe_context(long_score, short_score, market, evidence)
+        evidence["cross_market_context"] = self._cross_market_context_evidence(market)
         stateful_filter = self._stateful_momentum_filter(variant, sequence_snapshot, market, long_score, short_score)
         if stateful_filter is not None:
             evidence["stateful_momentum_filter"] = stateful_filter
@@ -210,6 +212,7 @@ class HitAndRunStrategy:
             target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
             trade_profile=str(higher_timeframe_gate.get("profile") or "fast"),
         )
+        cross_market_confirmation_gate = self._cross_market_confirmation_gate(side, market, score)
         duplicate_gate = self._duplicate_signal_gate(
             side=side,
             snapshot=snapshot,
@@ -253,6 +256,8 @@ class HitAndRunStrategy:
             blockers.append(local_execution_gate["blocker"])
         if not fee_edge_gate["allowed"]:
             blockers.append(fee_edge_gate["blocker"])
+        if not cross_market_confirmation_gate["allowed"]:
+            blockers.append(cross_market_confirmation_gate["blocker"])
         if not duplicate_gate["allowed"]:
             blockers.append(duplicate_gate["blocker"])
         if not entry_follow_through_gate["allowed"]:
@@ -279,6 +284,7 @@ class HitAndRunStrategy:
             "higher_timeframe_gate": higher_timeframe_gate,
             "local_execution_gate": local_execution_gate,
             "fee_edge_gate": fee_edge_gate,
+            "cross_market_gate": cross_market_confirmation_gate,
             "duplicate_signal_gate": duplicate_gate,
             "entry_follow_through_gate": entry_follow_through_gate,
             "weak_neutral_short_gate": weak_neutral_short_gate,
@@ -344,6 +350,12 @@ class HitAndRunStrategy:
                 "stateful momentum confirmed but entry follow-through gate blocked early entry: "
                 f"confirmations={gate.get('confirmations')} score={gate.get('score')}"
             )
+        if "btc_microstructure_contradiction" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("cross_market_gate") or {}
+            return (
+                "stateful momentum confirmed but BTC anchor contradicted moderate ETH signal: "
+                f"side={gate.get('side')} eth_strength={gate.get('eth_strength')}"
+            )
         if "weak_neutral_long_quality" in stateful_filter["blockers"]:
             gate = stateful_filter.get("weak_neutral_long_gate") or {}
             return (
@@ -360,6 +372,25 @@ class HitAndRunStrategy:
             "stateful momentum confirmed but score blocked: "
             f"score={stateful_filter['score']} < required={stateful_filter['required_score']}"
         )
+
+    def _cross_market_context_evidence(self, market: MarketState) -> dict:
+        context = market.cross_market_context or {}
+        return {
+            "enabled": self.settings.cross_market_enabled,
+            "age_seconds": market.cross_market_context_age_seconds,
+            "stale": self.settings.cross_market_enabled and not context,
+            "anchor_symbol": self.settings.cross_market_anchor_symbol.upper(),
+            "btc_order_flow_imbalance_1s": market.btc_order_flow_imbalance_1s,
+            "btc_taker_aggression_imbalance_1s": market.btc_taker_aggression_imbalance_1s,
+            "btc_microprice_mid_bps": market.btc_microprice_mid_bps,
+            "eth_btc_relative_return_15s_pct": market.eth_btc_relative_return_15s_pct,
+            "eth_btc_relative_return_60s_pct": market.eth_btc_relative_return_60s_pct,
+            "context": context,
+        }
+
+    def _cross_market_confirmation_gate(self, side: str, market: MarketState, score: float) -> dict:
+        side_enum = Side.long if side == "long" else Side.short
+        return cross_market_gate(self.settings, market, side_enum, score)
 
     def _fee_edge_quality_gate(
         self,

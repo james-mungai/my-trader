@@ -158,15 +158,15 @@ Acceptance:
 
 Goal: use BTC and relative ETH strength as veto/confirmation context.
 
-- [ ] Add optional BTCUSDT public stream context.
-- [ ] Add ETH/BTC relative strength proxy.
-- [ ] Add BTC contradiction veto for moderate ETH signals.
-- [ ] Allow ETH counter-move only when ETH strength is extreme and BTC pressure decelerates.
+- [x] Add optional BTCUSDT public stream context.
+- [x] Add ETH/BTC relative strength proxy.
+- [x] Add BTC contradiction veto for moderate ETH signals.
+- [x] Allow ETH counter-move only when ETH strength is extreme and BTC pressure decelerates.
 
 Acceptance:
 
-- [ ] ETH decisions log BTC confirmation/veto state.
-- [ ] Tests cover BTC veto and ETH relative-strength override.
+- [x] ETH decisions log BTC confirmation/veto state.
+- [x] Tests cover BTC veto and ETH relative-strength override.
 
 ## Stage 9 - Maker Strategy Research
 

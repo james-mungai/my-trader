@@ -48,11 +48,11 @@ def test_compresses_previous_rotation_bucket(tmp_path):
     )
     recorder = BinanceStreamRecorder(settings, MarketStateBook(settings), AuditLog(settings))
     previous = "2026-05-10T1700Z"
-    recorder._current_buckets["bookTicker"] = previous
+    recorder._current_buckets["BTCUSDT:bookTicker"] = previous
     raw_path = tmp_path / "raw_ws" / f"BTCUSDT_bookTicker_{previous}.jsonl"
     raw_path.write_text(json.dumps({"ok": True}) + "\n", encoding="utf-8")
 
-    recorder._compress_previous_bucket("bookTicker", "2026-05-10T1800Z")
+    recorder._compress_previous_bucket("BTCUSDT", "bookTicker", "2026-05-10T1800Z")
 
     gz_path = raw_path.with_suffix(raw_path.suffix + ".gz")
     assert not raw_path.exists()

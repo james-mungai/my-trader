@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     higher_timeframe_min_closed_candles: int = Field(default=30, alias="HIGHER_TIMEFRAME_MIN_CLOSED_CANDLES")
     higher_timeframe_score_boost: float = Field(default=0.04, alias="HIGHER_TIMEFRAME_SCORE_BOOST")
     higher_timeframe_score_penalty: float = Field(default=0.02, alias="HIGHER_TIMEFRAME_SCORE_PENALTY")
+    cross_market_enabled: bool = Field(default=False, alias="CROSS_MARKET_ENABLED")
+    cross_market_anchor_symbol: str = Field(default="BTCUSDT", alias="CROSS_MARKET_ANCHOR_SYMBOL")
+    cross_market_max_context_age_seconds: float = Field(default=2.0, alias="CROSS_MARKET_MAX_CONTEXT_AGE_SECONDS")
+    cross_market_btc_veto_score_ceiling: float = Field(default=0.86, alias="CROSS_MARKET_BTC_VETO_SCORE_CEILING")
+    cross_market_relative_strength_override_score: float = Field(
+        default=0.92,
+        alias="CROSS_MARKET_RELATIVE_STRENGTH_OVERRIDE_SCORE",
+    )
+    cross_market_min_relative_strength: float = Field(default=0.72, alias="CROSS_MARKET_MIN_RELATIVE_STRENGTH")
 
     decision_interval_ms: int = Field(default=500, alias="DECISION_INTERVAL_MS")
     min_warmup_seconds: int = Field(default=180, alias="MIN_WARMUP_SECONDS")

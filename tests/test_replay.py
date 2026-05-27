@@ -96,6 +96,21 @@ def test_replay_discovers_and_loads_compressed_jsonl(tmp_path):
     assert summary.messages == 1
 
 
+def test_replay_discovers_anchor_symbol_files_when_cross_market_enabled(tmp_path):
+    raw_dir = tmp_path / "raw_ws"
+    raw_dir.mkdir(parents=True)
+    eth_path = raw_dir / "ETHUSDT_bookTicker_2026-05-03T0800Z.jsonl"
+    btc_path = raw_dir / "BTCUSDT_bookTicker_2026-05-03T0800Z.jsonl"
+    eth_path.write_text("", encoding="utf-8")
+    btc_path.write_text("", encoding="utf-8")
+
+    settings = Settings(DATA_DIR=str(tmp_path), SYMBOL="ETHUSDT", CROSS_MARKET_ENABLED=True)
+
+    files = discover_raw_files(settings)
+
+    assert files == [btc_path, eth_path]
+
+
 def test_replay_reports_open_position_and_can_flatten_at_end(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw_ws"
     raw_dir.mkdir(parents=True)

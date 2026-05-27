@@ -9,6 +9,7 @@ from typing import Iterable, Iterator, TextIO
 from futures_lab.audit import AuditLog
 from futures_lab.candidate_outcomes import CandidateOutcomeTracker
 from futures_lab.config import Settings
+from futures_lab.cross_market import build_cross_market_context
 from futures_lab.hostile_replay import HostileReplayBroker, HostileReplayStats
 from futures_lab.market_state import MarketStateBook
 from futures_lab.models import DecisionAction, MarketState, PaperPosition, PaperTrade, Side
@@ -206,12 +207,15 @@ def discover_raw_files(settings: Settings, pattern: str | None = None) -> list[P
     raw_dir = Path(settings.data_dir) / "raw_ws"
     if pattern is not None:
         return sorted(raw_dir.glob(pattern))
-    return sorted(
-        [
-            *raw_dir.glob(f"{settings.symbol.upper()}_*_*.jsonl"),
-            *raw_dir.glob(f"{settings.symbol.upper()}_*_*.jsonl.gz"),
-        ]
-    )
+    symbols = [settings.symbol.upper()]
+    anchor = settings.cross_market_anchor_symbol.upper()
+    if settings.cross_market_enabled and anchor not in symbols:
+        symbols.append(anchor)
+    files = []
+    for symbol in symbols:
+        files.extend(raw_dir.glob(f"{symbol}_*_*.jsonl"))
+        files.extend(raw_dir.glob(f"{symbol}_*_*.jsonl.gz"))
+    return sorted(files)
 
 
 @contextmanager
@@ -266,6 +270,11 @@ def replay_files(
     path_list = [Path(path) for path in paths]
     state_book = MarketStateBook(settings)
     state_book.set_connected(True)
+    anchor_symbol = settings.cross_market_anchor_symbol.upper()
+    cross_market_book = None
+    if settings.cross_market_enabled and anchor_symbol != settings.symbol.upper():
+        cross_market_book = MarketStateBook(settings.model_copy(update={"symbol": anchor_symbol}))
+        cross_market_book.set_connected(True)
     strategy = HitAndRunStrategy(settings)
     risk = RiskEngine(settings)
     hostile_enabled = settings.hostile_replay_enabled if hostile is None else hostile
@@ -291,7 +300,14 @@ def replay_files(
     ):
         summary.messages += 1
         last_message_at = message.received_at
+        symbol = _payload_symbol(message.payload)
+        if cross_market_book is not None and symbol == anchor_symbol:
+            cross_market_book.ingest(message.payload, received_at=message.received_at)
+            _refresh_cross_market_context(settings, state_book, cross_market_book, message.received_at)
+            continue
         state_book.ingest(message.payload, received_at=message.received_at)
+        if cross_market_book is not None:
+            _refresh_cross_market_context(settings, state_book, cross_market_book, message.received_at)
 
         should_sample = last_sample_at is None
         if last_sample_at is not None:
@@ -388,3 +404,20 @@ def replay_files(
     if audit is not None:
         audit.write("replay_complete", summary.model_dump())
     return summary
+
+
+def _payload_symbol(payload: dict) -> str | None:
+    symbol = payload.get("s")
+    return str(symbol).upper() if symbol else None
+
+
+def _refresh_cross_market_context(
+    settings: Settings,
+    state_book: MarketStateBook,
+    cross_market_book: MarketStateBook,
+    current: datetime,
+) -> None:
+    primary = state_book.snapshot(current=current)
+    anchor = cross_market_book.snapshot(current=current)
+    context = build_cross_market_context(settings, primary, anchor, updated_at=current)
+    state_book.set_cross_market_context(context, updated_at=current)

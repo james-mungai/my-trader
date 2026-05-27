@@ -108,6 +108,15 @@ class MarketState(BaseModel):
     higher_timeframe_bias_side: str = "neutral"
     higher_timeframe_bias_strength: float = 0.0
     higher_timeframe_bias_reason: str = ""
+    cross_market_context: dict[str, Any] = Field(default_factory=dict)
+    cross_market_context_age_seconds: float | None = None
+    btc_order_flow_imbalance_1s: float | None = None
+    btc_taker_aggression_imbalance_1s: float | None = None
+    btc_microprice_mid_bps: float | None = None
+    btc_return_15s_pct: float | None = None
+    btc_return_60s_pct: float | None = None
+    eth_btc_relative_return_15s_pct: float | None = None
+    eth_btc_relative_return_60s_pct: float | None = None
     regime: Regime = Regime.unknown
 
 

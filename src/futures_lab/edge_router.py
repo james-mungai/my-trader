@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from futures_lab.config import Settings
 from futures_lab.costs import EffectiveCost, estimate_effective_cost
+from futures_lab.cross_market import cross_market_gate
 from futures_lab.models import MarketState, Side
 
 
@@ -312,6 +313,9 @@ class EdgeRouter:
         bias_strength = market.higher_timeframe_bias_strength
         if bias_side in {"long", "short"} and bias_side != side.value and bias_strength >= self.settings.higher_timeframe_gate_min_strength:
             blockers.append("higher_timeframe_hostile")
+        cross_gate = cross_market_gate(self.settings, market, side, score)
+        if not cross_gate["allowed"]:
+            blockers.append(cross_gate["blocker"])
         return blockers
 
     def _signed_features(self, market: MarketState, side: Side) -> dict[str, float]:

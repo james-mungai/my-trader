@@ -11,6 +11,7 @@ import websockets
 
 from futures_lab.audit import AuditLog
 from futures_lab.config import Settings
+from futures_lab.cross_market import build_cross_market_context
 from futures_lab.market_state import MarketStateBook
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ class BinanceStreamRecorder:
         self._stop: asyncio.Event | None = None
         self._last_recorded_at: dict[str, datetime] = {}
         self._current_buckets: dict[str, str] = {}
+        self._anchor_symbol = self.settings.cross_market_anchor_symbol.upper()
+        self._cross_market_state = self._build_cross_market_state()
         self.raw_dir = Path(self.settings.data_dir) / "raw_ws"
         self.raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -58,10 +61,13 @@ class BinanceStreamRecorder:
 
     async def _run(self) -> None:
         symbol = self.settings.symbol_lower
+        anchor = self._anchor_symbol.lower()
         public_stream_names = [f"{symbol}@bookTicker"]
         if self.settings.consume_depth_stream or self.settings.record_depth_stream:
             levels = self._supported_depth_levels(self.settings.depth_levels)
             public_stream_names.append(f"{symbol}@depth{levels}@100ms")
+        if self._cross_market_state is not None:
+            public_stream_names.append(f"{anchor}@bookTicker")
         public_streams = "/".join(public_stream_names)
         market_stream_names = [
             f"{symbol}@aggTrade",
@@ -70,6 +76,13 @@ class BinanceStreamRecorder:
         ]
         if self.settings.consume_liquidation_stream:
             market_stream_names.append(f"{symbol}@forceOrder")
+        if self._cross_market_state is not None:
+            market_stream_names.extend(
+                [
+                    f"{anchor}@aggTrade",
+                    f"{anchor}@markPrice@1s",
+                ]
+            )
         market_streams = "/".join(market_stream_names)
         await asyncio.gather(
             self._consume(PUBLIC_WS_BASE + public_streams),
@@ -89,7 +102,7 @@ class BinanceStreamRecorder:
                         payload = envelope.get("data", envelope)
                         if self.settings.record_raw_ws:
                             self._record_raw(envelope)
-                        self.state.ingest(payload)
+                        self._ingest_payload(envelope, payload)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -101,13 +114,14 @@ class BinanceStreamRecorder:
     def _record_raw(self, envelope: dict[str, Any]) -> None:
         payload = envelope.get("data", envelope)
         event = self._raw_event_name(envelope, payload)
+        symbol = self._payload_symbol(envelope, payload) or self.settings.symbol.upper()
         now = datetime.now(timezone.utc)
-        if not self._should_record_event(event, now):
+        if not self._should_record_event(symbol, event, now):
             return
 
         bucket = self._bucket(now)
-        self._compress_previous_bucket(event, bucket)
-        path = self.raw_dir / f"{self.settings.symbol.upper()}_{event}_{bucket}.jsonl"
+        self._compress_previous_bucket(symbol, event, bucket)
+        path = self.raw_dir / f"{symbol}_{event}_{bucket}.jsonl"
         row = {
             "received_at": now.isoformat(),
             "message": envelope,
@@ -116,7 +130,7 @@ class BinanceStreamRecorder:
             handle.write(json.dumps(row, separators=(",", ":"), default=str))
             handle.write("\n")
 
-    def _should_record_event(self, event: str, now: datetime) -> bool:
+    def _should_record_event(self, symbol: str, event: str, now: datetime) -> bool:
         if event in {"depthUpdate", "partialDepth"} and not self.settings.record_depth_stream:
             return False
         if event != "bookTicker":
@@ -124,10 +138,11 @@ class BinanceStreamRecorder:
         interval = max(0, self.settings.record_book_ticker_min_interval_ms)
         if interval <= 0:
             return True
-        last = self._last_recorded_at.get(event)
+        key = f"{symbol}:{event}"
+        last = self._last_recorded_at.get(key)
         if last is not None and (now - last).total_seconds() * 1000 < interval:
             return False
-        self._last_recorded_at[event] = now
+        self._last_recorded_at[key] = now
         return True
 
     def _bucket(self, now: datetime) -> str:
@@ -136,17 +151,18 @@ class BinanceStreamRecorder:
         bucket = now.replace(minute=minute, second=0, microsecond=0)
         return bucket.strftime("%Y-%m-%dT%H%MZ")
 
-    def _compress_previous_bucket(self, event: str, current_bucket: str) -> None:
-        previous_bucket = self._current_buckets.get(event)
+    def _compress_previous_bucket(self, symbol: str, event: str, current_bucket: str) -> None:
+        key = f"{symbol}:{event}"
+        previous_bucket = self._current_buckets.get(key)
         if previous_bucket is None:
-            self._current_buckets[event] = current_bucket
+            self._current_buckets[key] = current_bucket
             return
         if previous_bucket == current_bucket:
             return
-        self._current_buckets[event] = current_bucket
+        self._current_buckets[key] = current_bucket
         if not self.settings.compress_rotated_raw:
             return
-        raw_path = self.raw_dir / f"{self.settings.symbol.upper()}_{event}_{previous_bucket}.jsonl"
+        raw_path = self.raw_dir / f"{symbol}_{event}_{previous_bucket}.jsonl"
         gz_path = raw_path.with_suffix(raw_path.suffix + ".gz")
         if not raw_path.exists() or gz_path.exists():
             return
@@ -162,6 +178,40 @@ class BinanceStreamRecorder:
         if "@depth" in stream:
             return "partialDepth"
         return "unknown"
+
+    def _ingest_payload(self, envelope: dict[str, Any], payload: dict[str, Any]) -> None:
+        symbol = self._payload_symbol(envelope, payload)
+        if self._cross_market_state is not None and symbol == self._anchor_symbol:
+            self._cross_market_state.ingest(payload)
+            self._refresh_cross_market_context()
+            return
+        self.state.ingest(payload)
+        self._refresh_cross_market_context()
+
+    def _refresh_cross_market_context(self) -> None:
+        if self._cross_market_state is None:
+            return
+        now = datetime.now(timezone.utc)
+        primary = self.state.snapshot(current=now)
+        anchor = self._cross_market_state.snapshot(current=now)
+        context = build_cross_market_context(self.settings, primary, anchor, updated_at=now)
+        self.state.set_cross_market_context(context, updated_at=now)
+
+    def _payload_symbol(self, envelope: dict[str, Any], payload: dict[str, Any]) -> str | None:
+        symbol = payload.get("s")
+        if symbol:
+            return str(symbol).upper()
+        stream = str(envelope.get("stream") or "")
+        if "@" in stream:
+            return stream.split("@", 1)[0].upper()
+        return None
+
+    def _build_cross_market_state(self) -> MarketStateBook | None:
+        if not self.settings.cross_market_enabled:
+            return None
+        if self._anchor_symbol == self.settings.symbol.upper():
+            return None
+        return MarketStateBook(self.settings.model_copy(update={"symbol": self._anchor_symbol}))
 
     def _supported_depth_levels(self, requested: int) -> int:
         for level in (5, 10, 20):

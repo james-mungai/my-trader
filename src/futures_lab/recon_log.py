@@ -167,4 +167,13 @@ class ReconLogger:
             "higher_timeframe_bias_strength": market.higher_timeframe_bias_strength,
             "higher_timeframe_bias_reason": market.higher_timeframe_bias_reason,
             "higher_timeframe_context": market.higher_timeframe_context,
+            "cross_market_context_age_seconds": market.cross_market_context_age_seconds,
+            "btc_order_flow_imbalance_1s": market.btc_order_flow_imbalance_1s,
+            "btc_taker_aggression_imbalance_1s": market.btc_taker_aggression_imbalance_1s,
+            "btc_microprice_mid_bps": market.btc_microprice_mid_bps,
+            "btc_return_15s_pct": market.btc_return_15s_pct,
+            "btc_return_60s_pct": market.btc_return_60s_pct,
+            "eth_btc_relative_return_15s_pct": market.eth_btc_relative_return_15s_pct,
+            "eth_btc_relative_return_60s_pct": market.eth_btc_relative_return_60s_pct,
+            "cross_market_context": market.cross_market_context,
         }

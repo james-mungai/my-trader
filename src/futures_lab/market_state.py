@@ -90,6 +90,8 @@ class MarketStateBook:
     open_interest_points: deque[OpenInterestPoint] = field(default_factory=deque)
     higher_timeframe_context: dict = field(default_factory=dict)
     higher_timeframe_updated_at: datetime | None = None
+    cross_market_context: dict = field(default_factory=dict)
+    cross_market_updated_at: datetime | None = None
     depth_bids: dict[float, float] = field(default_factory=dict)
     depth_asks: dict[float, float] = field(default_factory=dict)
     last_stream_event_type: str | None = None
@@ -172,6 +174,10 @@ class MarketStateBook:
     def set_higher_timeframe_context(self, context: dict, updated_at: datetime | None = None) -> None:
         self.higher_timeframe_context = context
         self.higher_timeframe_updated_at = updated_at or now_utc()
+
+    def set_cross_market_context(self, context: dict, updated_at: datetime | None = None) -> None:
+        self.cross_market_context = context
+        self.cross_market_updated_at = updated_at or now_utc()
 
     @property
     def mid_price(self) -> float | None:
@@ -272,6 +278,19 @@ class MarketStateBook:
             higher_timeframe_bias_side=self._higher_timeframe_bias_side(),
             higher_timeframe_bias_strength=self._higher_timeframe_bias_strength(),
             higher_timeframe_bias_reason=self._higher_timeframe_bias_reason(),
+            cross_market_context=self.cross_market_context,
+            cross_market_context_age_seconds=(
+                (current - self.cross_market_updated_at).total_seconds()
+                if self.cross_market_updated_at is not None
+                else None
+            ),
+            btc_order_flow_imbalance_1s=self._cross_anchor_value("order_flow_imbalance_1s"),
+            btc_taker_aggression_imbalance_1s=self._cross_anchor_value("taker_aggression_imbalance_1s"),
+            btc_microprice_mid_bps=self._cross_anchor_value("microprice_mid_bps"),
+            btc_return_15s_pct=self._cross_anchor_value("return_15s_pct"),
+            btc_return_60s_pct=self._cross_anchor_value("return_60s_pct"),
+            eth_btc_relative_return_15s_pct=self._cross_relative_value("return_15s_pct"),
+            eth_btc_relative_return_60s_pct=self._cross_relative_value("return_60s_pct"),
         )
         liquidation_phase = classify_liquidation_phase(state, self.settings)
         state.liquidation_phase = liquidation_phase.phase
@@ -657,3 +676,19 @@ class MarketStateBook:
     def _higher_timeframe_bias_reason(self) -> str:
         bias = self.higher_timeframe_context.get("bias") if self.higher_timeframe_context else None
         return str((bias or {}).get("reason") or "")
+
+    def _cross_anchor_value(self, key: str) -> float | None:
+        anchor = self.cross_market_context.get("anchor") if self.cross_market_context else None
+        value = (anchor or {}).get(key)
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _cross_relative_value(self, key: str) -> float | None:
+        relative = self.cross_market_context.get("relative") if self.cross_market_context else None
+        value = (relative or {}).get(key)
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
