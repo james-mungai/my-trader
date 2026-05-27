@@ -44,16 +44,16 @@ Acceptance:
 
 Goal: stop judging targets by fees alone.
 
-- [ ] Add venue/order-type cost settings: maker fee bps, taker fee bps, expected slippage bps, latency penalty bps.
-- [ ] Add expected spread crossing cost from current book.
-- [ ] Compute `expected_round_trip_cost_bps` by candidate entry/exit type.
-- [ ] Replace thin-target checks with `expected_target_bps >= multiple * expected_total_cost_bps`.
-- [ ] Log cost decomposition in decisions and shadow trades.
+- [x] Add venue/order-type cost settings: maker fee bps, taker fee bps, expected slippage bps, latency penalty bps.
+- [x] Add expected spread crossing cost from current book.
+- [x] Compute `expected_round_trip_cost_bps` by candidate entry/exit type.
+- [x] Replace thin-target checks with `expected_target_bps >= multiple * expected_total_cost_bps`.
+- [x] Log cost decomposition in decisions and shadow trades.
 
 Acceptance:
 
-- [ ] Tests prove Binance-style taker/taker 0.10% scalps are blocked when cost multiple fails.
-- [ ] Tests prove lower-cost or larger-target candidates can pass when all other gates agree.
+- [x] Tests prove Binance-style taker/taker 0.10% scalps are blocked when cost multiple fails.
+- [x] Tests prove lower-cost or larger-target candidates can pass when all other gates agree.
 
 ## Stage 3 - Edge Candidate Router
 

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
 from futures_lab.config import Settings
+from futures_lab.costs import estimate_effective_cost
 from futures_lab.markov import MarketRegimeSnapshot, MarketStateMachine
 from futures_lab.models import Decision, DecisionAction, MarketState, Regime, TradeMode
 
@@ -188,6 +189,7 @@ class HitAndRunStrategy:
         fee_edge_gate = self._fee_edge_quality_gate(
             snapshot=snapshot,
             adaptive_gate=adaptive_gate,
+            market=market,
             target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
             trade_profile=str(higher_timeframe_gate.get("profile") or "fast"),
         )
@@ -281,7 +283,7 @@ class HitAndRunStrategy:
                 profile=str(higher_timeframe_gate.get("profile") or "fast"),
             )
         if row["blocked"] and "duplicate_signal" not in blockers:
-            shadow = self._shadow_trade_signal(side, market, score, blockers)
+            shadow = self._shadow_trade_signal(side, market, score, blockers, fee_edge_gate)
             if shadow is not None:
                 row["shadow_trade"] = shadow
         return row
@@ -346,11 +348,12 @@ class HitAndRunStrategy:
         self,
         snapshot: MarketRegimeSnapshot,
         adaptive_gate: dict,
+        market: MarketState,
         target_move_pct: float,
         trade_profile: str,
     ) -> dict:
-        round_trip_fee_pct = 2 * (self.settings.taker_fee_bps / 10_000)
-        required_target_pct = round_trip_fee_pct * self.settings.min_gross_target_fee_multiple
+        effective_cost = estimate_effective_cost(self.settings, market)
+        required_target_pct = effective_cost.required_target_pct(self.settings.min_gross_target_fee_multiple)
         quality_score = float(adaptive_gate.get("quality_score") or 0.0)
         fee_buffer = max(1.0, self.settings.fee_edge_target_fee_buffer)
         fee_thin_target = target_move_pct <= required_target_pct * fee_buffer
@@ -374,11 +377,12 @@ class HitAndRunStrategy:
             "allowed": allowed,
             "blocker": blocker,
             "target_move_pct": target_move_pct,
-            "round_trip_fee_pct": round_trip_fee_pct,
+            "round_trip_fee_pct": effective_cost.total_cost_pct,
             "required_target_pct": required_target_pct,
             "fee_buffer": fee_buffer,
             "fee_thin_target": fee_thin_target,
             "trade_profile": trade_profile,
+            "effective_cost": effective_cost.model_dump(),
             "quality_score": quality_score,
             "min_quality": min_quality,
             "sequence_confidence": snapshot.confidence,
@@ -1575,7 +1579,14 @@ class HitAndRunStrategy:
             leverage=self.settings.slow_leverage,
         )
 
-    def _shadow_trade_signal(self, side: str, market: MarketState, confidence: float, blockers: list[str]) -> dict | None:
+    def _shadow_trade_signal(
+        self,
+        side: str,
+        market: MarketState,
+        confidence: float,
+        blockers: list[str],
+        fee_edge_gate: dict | None = None,
+    ) -> dict | None:
         if market.mid_price is None:
             return None
         direction = 1 if side == "long" else -1
@@ -1594,6 +1605,7 @@ class HitAndRunStrategy:
             "leverage": self.settings.fast_leverage,
             "stake_usd": self.settings.stake_usd,
             "notional_usd": self.settings.stake_usd * self.settings.fast_leverage,
+            "effective_cost": (fee_edge_gate or {}).get("effective_cost"),
         }
 
     def _clamp(self, value: float) -> float:
@@ -1678,5 +1690,6 @@ class HitAndRunStrategy:
             "exchange_event_lag_ms": market.exchange_event_lag_ms,
             "avg_event_lag_30s_ms": market.avg_event_lag_30s_ms,
             "funding_rate": market.funding_rate,
+            "effective_cost": estimate_effective_cost(self.settings, market).model_dump(),
         }
 

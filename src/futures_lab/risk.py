@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from futures_lab.config import Settings
+from futures_lab.costs import estimate_effective_cost
 from futures_lab.models import Decision, DecisionAction, MarketState, PaperState, RiskVerdict
 
 
@@ -34,12 +35,13 @@ class RiskEngine:
         if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:
             blockers.append("spread too wide")
         if decision.target_move_pct is not None:
-            round_trip_fee_pct = 2 * (self.settings.taker_fee_bps / 10_000)
-            required_target_pct = round_trip_fee_pct * self.settings.min_gross_target_fee_multiple
+            effective_cost = estimate_effective_cost(self.settings, market)
+            required_target_pct = effective_cost.required_target_pct(self.settings.min_gross_target_fee_multiple)
             if decision.target_move_pct < required_target_pct:
                 blockers.append(
-                    "target does not clear fees: "
-                    f"{decision.target_move_pct:.4%} < {required_target_pct:.4%}"
+                    "target does not clear effective costs: "
+                    f"{decision.target_move_pct:.4%} < {required_target_pct:.4%} "
+                    f"(cost={effective_cost.total_cost_bps:.2f}bps)"
                 )
         if decision.stop_move_pct is not None and decision.leverage is not None:
             leveraged_stop_loss = decision.stop_move_pct * decision.leverage

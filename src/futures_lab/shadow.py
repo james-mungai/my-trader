@@ -22,6 +22,7 @@ class ShadowPosition:
     confidence: float
     opened_at: datetime
     blocked_by: list[str] = field(default_factory=list)
+    effective_cost: dict | None = None
     source: str = "blocked_stateful_continuation"
     max_favorable_move_pct: float = 0.0
     max_adverse_move_pct: float = 0.0
@@ -60,6 +61,7 @@ class ShadowTradeTracker:
             confidence=float(signal["confidence"]),
             opened_at=actual_opened_at,
             blocked_by=list(signal.get("blocked_by") or []),
+            effective_cost=signal.get("effective_cost"),
             source=str(signal.get("source") or "blocked_stateful_continuation"),
         )
         position.exit_shadow = ExitShadowEvaluator(
@@ -170,6 +172,7 @@ class ShadowTradeTracker:
             "confidence": position.confidence,
             "opened_at": position.opened_at.isoformat(),
             "blocked_by": position.blocked_by,
+            "effective_cost": position.effective_cost,
         }
         if extra:
             row.update(extra)

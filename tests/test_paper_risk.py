@@ -85,7 +85,24 @@ def test_risk_blocks_target_that_does_not_clear_round_trip_fees():
     verdict = RiskEngine(settings).evaluate(decision, market, broker.state())
 
     assert not verdict.allowed
-    assert "target does not clear fees" in " ".join(verdict.blockers)
+    assert "target does not clear effective costs" in " ".join(verdict.blockers)
+
+
+def test_risk_allows_larger_target_that_clears_effective_costs():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        FAST_TARGET_MOVE_PCT=0.0025,
+        EXPECTED_SLIPPAGE_BPS=0.5,
+        LATENCY_ADVERSE_SELECTION_BPS=0.5,
+        MIN_GROSS_TARGET_FEE_MULTIPLE=2.0,
+    )
+    market = _market(100.0, spread_bps=0.5)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+
+    verdict = RiskEngine(settings).evaluate(decision, market, broker.state())
+
+    assert verdict.allowed
 
 
 def test_risk_blocks_after_daily_target_hit():
