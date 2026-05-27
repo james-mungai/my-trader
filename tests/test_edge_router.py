@@ -205,3 +205,76 @@ def test_baseline_candidate_is_logged_with_router_candidates():
 
     assert any(candidate["strategy"] == "stateful_momentum_baseline" for candidate in result["candidates"])
     assert result["candidate_count"] == 7
+
+
+def test_maker_reversion_candidates_are_disabled_by_default():
+    router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
+
+    result = router.evaluate(_market())
+
+    assert not any(candidate["family"] == "maker_reversion" for candidate in result["candidates"])
+
+
+def test_maker_reversion_is_shadow_only_when_enabled():
+    router = EdgeRouter(
+        Settings(
+            MAKER_REVERSION_SHADOW_ENABLED=True,
+            EDGE_ROUTER_MIN_EV_BPS=-100,
+        )
+    )
+
+    result = router.evaluate(
+        _market(
+            higher_timeframe_bias_side="neutral",
+            order_flow_imbalance_1s=0.02,
+            order_flow_imbalance_5s=-0.01,
+            taker_aggression_imbalance_1s=0.03,
+            taker_aggression_imbalance_5s=-0.02,
+            realized_vol_60s_pct=0.0002,
+            spread_bps=0.45,
+            spread_bps_std_5s=0.03,
+            liquidation_notional_30s=None,
+            liquidation_phase="normal",
+            best_bid_qty=18.0,
+            best_ask_qty=18.0,
+            bid_depth_refill_rate_5s=0.08,
+            bid_depth_evaporation_rate_5s=0.02,
+            ask_depth_refill_rate_5s=0.08,
+            ask_depth_evaporation_rate_5s=0.02,
+            microprice_mid_bps=0.02,
+            vamp_mid_bps=-0.01,
+        )
+    )
+    maker_long = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "maker_reversion_long")
+    maker_short = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "maker_reversion_short")
+
+    assert result["candidate_count"] == 8
+    assert maker_long["entry_type"] == "maker"
+    assert maker_long["exit_type"] == "maker"
+    assert maker_long["family"] == "maker_reversion"
+    assert "maker_shadow_only" in maker_long["blockers"]
+    assert maker_long["viable"] is False
+    assert maker_short["viable"] is False
+
+
+def test_maker_reversion_blocks_toxic_flow_and_liquidation_pulse():
+    router = EdgeRouter(Settings(MAKER_REVERSION_SHADOW_ENABLED=True, EDGE_ROUTER_MIN_EV_BPS=-100))
+
+    result = router.evaluate(
+        _market(
+            order_flow_imbalance_1s=-0.95,
+            order_flow_imbalance_5s=-0.80,
+            taker_aggression_imbalance_1s=-0.92,
+            taker_aggression_imbalance_5s=-0.78,
+            realized_vol_60s_pct=0.002,
+            liquidation_notional_30s=100_000,
+            liquidation_phase="cascade_continuation",
+        )
+    )
+    maker_short = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "maker_reversion_short")
+
+    assert "maker_ofi_toxic" in maker_short["blockers"]
+    assert "maker_aggression_toxic" in maker_short["blockers"]
+    assert "maker_vol_too_high" in maker_short["blockers"]
+    assert "maker_liquidation_pulse" in maker_short["blockers"]
+    assert "maker_liquidation_phase_active" in maker_short["blockers"]

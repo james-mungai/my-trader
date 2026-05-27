@@ -172,14 +172,14 @@ Acceptance:
 
 Goal: only consider passive execution in calm, low-toxicity regimes.
 
-- [ ] Add maker candidate as shadow-only.
-- [ ] Require stable spread, low OFI, low aggression, low volatility, no liquidation pulse, and acceptable queue estimate.
-- [ ] Add adverse-selection penalty to maker fills in hostile replay.
+- [x] Add maker candidate as shadow-only.
+- [x] Require stable spread, low OFI, low aggression, low volatility, no liquidation pulse, and acceptable queue estimate.
+- [x] Add adverse-selection penalty to maker fills in hostile replay.
 
 Acceptance:
 
-- [ ] Maker candidate remains disabled by default.
-- [ ] Maker results are reported separately from taker impulse results.
+- [x] Maker candidate remains disabled by default.
+- [x] Maker results are reported separately from taker impulse results.
 
 ## Live-Readiness Gates
 

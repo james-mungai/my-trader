@@ -101,10 +101,10 @@ def test_candidate_outcome_summary_compares_accepted_and_rejected(tmp_path):
         "\n".join(
             [
                 '{"event":"open","strategy":"taker_impulse_long","side":"long","accepted":true}',
-                '{"event":"close","strategy":"taker_impulse_long","side":"long","accepted":true,"score":0.88,'
+                '{"event":"close","strategy":"taker_impulse_long","family":"taker_impulse","side":"long","accepted":true,"score":0.88,'
                 '"outcome_label":"target_first","target_before_stop":{"cost_adjusted":{"gross":true}},'
                 '"mfe_mae_horizons":{"60":{"mfe_pct":0.002,"mae_pct":-0.0002}}}',
-                '{"event":"close","strategy":"taker_impulse_short","side":"short","accepted":false,"score":0.42,'
+                '{"event":"close","strategy":"maker_reversion_short","family":"maker_reversion","side":"short","accepted":false,"score":0.42,'
                 '"outcome_label":"stop_first","target_before_stop":{"cost_adjusted":{"gross":false}},'
                 '"mfe_mae_horizons":{"60":{"mfe_pct":0.0004,"mae_pct":-0.001}}}',
             ]
@@ -119,5 +119,7 @@ def test_candidate_outcome_summary_compares_accepted_and_rejected(tmp_path):
     assert summary.accepted_vs_rejected["accepted"].target_first == 1
     assert summary.accepted_vs_rejected["rejected"].stop_first == 1
     assert summary.target_before_stop == {"cost_adjusted": {"gross": 1}}
+    assert summary.families["taker_impulse"].target_first == 1
+    assert summary.families["maker_reversion"].stop_first == 1
     assert summary.score_buckets["score_0.85_plus"].target_first == 1
     assert summary.score_buckets["score_below_0.70"].stop_first == 1

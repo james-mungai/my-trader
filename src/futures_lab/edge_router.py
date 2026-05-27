@@ -100,6 +100,13 @@ class EdgeRouter:
             self._liquidation_exhaustion_bounce_candidate(market, Side.long),
             self._liquidation_exhaustion_bounce_candidate(market, Side.short),
         ]
+        if self.settings.maker_reversion_shadow_enabled:
+            candidates.extend(
+                [
+                    self._maker_reversion_candidate(market, Side.long),
+                    self._maker_reversion_candidate(market, Side.short),
+                ]
+            )
         return candidates
 
     def _baseline_candidate(self, market: MarketState, baseline: BaselineCandidateInput) -> EdgeCandidate:
@@ -221,6 +228,40 @@ class EdgeRouter:
             return self._with_blocker(candidate, "cascade_not_exhausted")
         return candidate
 
+    def _maker_reversion_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:
+        toxicity = self._maker_toxicity_score(market)
+        queue_score = self._maker_queue_score(market, side)
+        fair_value_offset = self._maker_fair_value_offset(market, side)
+        score = self._bounded(0.45 * (1.0 - toxicity) + 0.35 * queue_score + 0.20 * fair_value_offset)
+        cost = estimate_effective_cost(self.settings, market, entry_order_type="maker", exit_order_type="maker")
+        candidate = self._build_candidate(
+            market=market,
+            strategy=f"maker_reversion_{side.value}",
+            family="maker_reversion",
+            side=side,
+            target_bps=self.settings.maker_reversion_target_bps,
+            stop_bps=self.settings.maker_reversion_stop_bps,
+            max_hold_ms=self.settings.maker_reversion_max_hold_ms,
+            score=score,
+            reasons=[
+                "passive maker reversion shadow candidate for calm low-toxicity regimes",
+                f"toxicity_score={round(toxicity, 4)}",
+                f"queue_score={round(queue_score, 4)}",
+                f"fair_value_offset={round(fair_value_offset, 4)}",
+            ],
+            cost=cost,
+            exit_plan={
+                "baseline": "maker_shadow_only",
+                "timeout_ms": self.settings.maker_reversion_max_hold_ms,
+                "queue_score": round(queue_score, 4),
+                "toxicity_score": round(toxicity, 4),
+                "adverse_selection_guard": "hostile_replay_maker_adverse_selection_bps",
+            },
+        )
+        blockers = self._maker_reversion_blockers(market, toxicity, queue_score)
+        blockers.append("maker_shadow_only")
+        return self._with_blockers(candidate, blockers)
+
     def _build_candidate(
         self,
         market: MarketState,
@@ -337,6 +378,68 @@ class EdgeRouter:
             "depth_pressure": sign * (market.depth_imbalance_top5 or market.book_imbalance_top or 0.0),
             "refill_pressure": refill_pressure,
         }
+
+    def _maker_reversion_blockers(self, market: MarketState, toxicity: float, queue_score: float) -> list[str]:
+        blockers = []
+        if market.spread_bps is None or market.spread_bps > self.settings.maker_reversion_max_spread_bps:
+            blockers.append("maker_spread_too_wide")
+        if (
+            market.spread_bps_std_5s is not None
+            and market.spread_bps_std_5s > self.settings.maker_reversion_max_spread_std_bps
+        ):
+            blockers.append("maker_spread_unstable")
+        if abs(market.order_flow_imbalance_1s or 0.0) > self.settings.maker_reversion_max_ofi:
+            blockers.append("maker_ofi_toxic")
+        if abs(market.order_flow_imbalance_5s or 0.0) > self.settings.maker_reversion_max_ofi:
+            blockers.append("maker_ofi_5s_toxic")
+        if abs(market.taker_aggression_imbalance_1s or 0.0) > self.settings.maker_reversion_max_aggression:
+            blockers.append("maker_aggression_toxic")
+        if abs(market.taker_aggression_imbalance_5s or 0.0) > self.settings.maker_reversion_max_aggression:
+            blockers.append("maker_aggression_5s_toxic")
+        if (market.realized_vol_60s_pct or 0.0) > self.settings.maker_reversion_max_vol_60s_pct:
+            blockers.append("maker_vol_too_high")
+        if (market.liquidation_notional_30s or 0.0) > 0:
+            blockers.append("maker_liquidation_pulse")
+        if market.liquidation_phase != "normal":
+            blockers.append("maker_liquidation_phase_active")
+        if queue_score < self.settings.maker_reversion_min_queue_score:
+            blockers.append("maker_queue_score_low")
+        if toxicity > 0.45:
+            blockers.append("maker_toxicity_high")
+        return blockers
+
+    def _maker_toxicity_score(self, market: MarketState) -> float:
+        spread_instability = self._bounded((market.spread_bps_std_5s or 0.0) / max(0.01, self.settings.maker_reversion_max_spread_std_bps))
+        ofi = max(abs(market.order_flow_imbalance_1s or 0.0), abs(market.order_flow_imbalance_5s or 0.0))
+        aggression = max(abs(market.taker_aggression_imbalance_1s or 0.0), abs(market.taker_aggression_imbalance_5s or 0.0))
+        vol = self._bounded((market.realized_vol_60s_pct or 0.0) / max(0.000001, self.settings.maker_reversion_max_vol_60s_pct))
+        liquidation = 1.0 if (market.liquidation_notional_30s or 0.0) > 0 or market.liquidation_phase != "normal" else 0.0
+        return self._bounded(0.25 * spread_instability + 0.25 * ofi + 0.25 * aggression + 0.15 * vol + 0.10 * liquidation)
+
+    def _maker_queue_score(self, market: MarketState, side: Side) -> float:
+        if side == Side.long:
+            own_qty = market.best_bid_qty
+            opposite_qty = market.best_ask_qty
+            refill = market.bid_depth_refill_rate_5s or 0.0
+            evap = market.bid_depth_evaporation_rate_5s or 0.0
+        else:
+            own_qty = market.best_ask_qty
+            opposite_qty = market.best_bid_qty
+            refill = market.ask_depth_refill_rate_5s or 0.0
+            evap = market.ask_depth_evaporation_rate_5s or 0.0
+        if own_qty is None or opposite_qty is None:
+            return 0.0
+        total = own_qty + opposite_qty
+        balance = own_qty / total if total > 0 else 0.0
+        stability = self._bounded(0.5 + refill - evap)
+        return self._bounded(0.55 * balance + 0.45 * stability)
+
+    def _maker_fair_value_offset(self, market: MarketState, side: Side) -> float:
+        sign = 1.0 if side == Side.long else -1.0
+        micro = sign * (market.microprice_mid_bps or 0.0)
+        vamp = sign * (market.vamp_mid_bps or 0.0)
+        # Maker reversion wants fair value slightly away from our passive quote, not a runaway impulse.
+        return self._bounded(1.0 - abs((micro + vamp) / max(0.1, 2 * (market.spread_bps or 1.0))))
 
     def _continuation_liquidation_notional(self, market: MarketState, side: Side) -> float:
         if side == Side.short:

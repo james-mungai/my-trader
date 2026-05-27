@@ -169,19 +169,31 @@ class HostileReplayBroker(PaperBroker):
         )
 
     def _entry_fill_price(self, side: Side, market: MarketState, reference: float) -> float:
-        base = market.best_ask if side == Side.long else market.best_bid
+        entry_type = self.settings.default_entry_order_type.strip().lower()
+        if entry_type == "maker":
+            base = market.best_bid if side == Side.long else market.best_ask
+            penalty_bps = self.settings.hostile_replay_maker_adverse_selection_bps + self._latency_penalty_bps()
+        else:
+            base = market.best_ask if side == Side.long else market.best_bid
+            penalty_bps = self.settings.hostile_replay_entry_slippage_bps + self._latency_penalty_bps()
         base = base or reference
-        penalty = (self.settings.hostile_replay_entry_slippage_bps + self._latency_penalty_bps()) / 10_000
+        penalty = penalty_bps / 10_000
         if side == Side.long:
             return base * (1 + penalty)
         return base * (1 - penalty)
 
     def _exit_fill_price(self, pos: PaperPosition, market: MarketState, reason: str) -> tuple[float, float]:
         reference = market.mid_price or pos.entry_price
-        base = market.best_bid if pos.side == Side.long else market.best_ask
+        exit_type = self.settings.default_exit_order_type.strip().lower()
+        if exit_type == "maker":
+            base = market.best_ask if pos.side == Side.long else market.best_bid
+            base_penalty_bps = self.settings.hostile_replay_maker_adverse_selection_bps
+        else:
+            base = market.best_bid if pos.side == Side.long else market.best_ask
+            base_penalty_bps = self.settings.hostile_replay_exit_slippage_bps
         base = base or reference
         stop_penalty_bps = self.settings.hostile_replay_stop_penalty_bps if _is_adverse_exit(reason) else 0.0
-        penalty = (self.settings.hostile_replay_exit_slippage_bps + self._latency_penalty_bps() + stop_penalty_bps) / 10_000
+        penalty = (base_penalty_bps + self._latency_penalty_bps() + stop_penalty_bps) / 10_000
         if pos.side == Side.long:
             fill = base * (1 - penalty)
         else:

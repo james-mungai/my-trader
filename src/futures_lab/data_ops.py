@@ -251,6 +251,7 @@ class CandidateOutcomeSummary:
     opens: int = 0
     closes: int = 0
     accepted_vs_rejected: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
+    families: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
     strategies: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
     score_buckets: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
     target_before_stop: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -263,6 +264,7 @@ class CandidateOutcomeSummary:
             "opens": self.opens,
             "closes": self.closes,
             "accepted_vs_rejected": {name: bucket.model_dump() for name, bucket in self.accepted_vs_rejected.items()},
+            "families": {name: bucket.model_dump() for name, bucket in self.families.items()},
             "strategies": {name: bucket.model_dump() for name, bucket in self.strategies.items()},
             "score_buckets": {name: bucket.model_dump() for name, bucket in self.score_buckets.items()},
             "target_before_stop": self.target_before_stop,
@@ -293,10 +295,12 @@ def summarize_candidate_outcomes(settings: Settings) -> CandidateOutcomeSummary:
                     continue
                 summary.closes += 1
                 accepted_key = "accepted" if row.get("accepted") else "rejected"
+                family_key = str(row.get("family") or "unknown")
                 strategy_key = str(row.get("strategy") or "unknown")
                 score_key = _score_bucket(float(row.get("score") or 0.0))
                 for bucket in [
                     summary.accepted_vs_rejected.setdefault(accepted_key, CandidateOutcomeBucket()),
+                    summary.families.setdefault(family_key, CandidateOutcomeBucket()),
                     summary.strategies.setdefault(strategy_key, CandidateOutcomeBucket()),
                     summary.score_buckets.setdefault(score_key, CandidateOutcomeBucket()),
                 ]:

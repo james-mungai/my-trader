@@ -188,6 +188,10 @@ class Settings(BaseSettings):
     hostile_replay_latency_bps_per_second: float = Field(default=1.0, alias="HOSTILE_REPLAY_LATENCY_BPS_PER_SECOND")
     hostile_replay_max_book_age_ms: int = Field(default=1_000, alias="HOSTILE_REPLAY_MAX_BOOK_AGE_MS")
     hostile_replay_max_event_lag_ms: float = Field(default=1_000.0, alias="HOSTILE_REPLAY_MAX_EVENT_LAG_MS")
+    hostile_replay_maker_adverse_selection_bps: float = Field(
+        default=2.0,
+        alias="HOSTILE_REPLAY_MAKER_ADVERSE_SELECTION_BPS",
+    )
     hostile_replay_maker_queue_fill_probability: float = Field(
         default=0.25,
         alias="HOSTILE_REPLAY_MAKER_QUEUE_FILL_PROBABILITY",
@@ -221,6 +225,16 @@ class Settings(BaseSettings):
     edge_router_impulse_max_hold_ms: int = Field(default=20_000, alias="EDGE_ROUTER_IMPULSE_MAX_HOLD_MS")
     edge_router_liquidation_max_hold_ms: int = Field(default=30_000, alias="EDGE_ROUTER_LIQUIDATION_MAX_HOLD_MS")
     edge_router_paper_enabled: bool = Field(default=False, alias="EDGE_ROUTER_PAPER_ENABLED")
+    maker_reversion_shadow_enabled: bool = Field(default=False, alias="MAKER_REVERSION_SHADOW_ENABLED")
+    maker_reversion_target_bps: float = Field(default=8.0, alias="MAKER_REVERSION_TARGET_BPS")
+    maker_reversion_stop_bps: float = Field(default=8.0, alias="MAKER_REVERSION_STOP_BPS")
+    maker_reversion_max_hold_ms: int = Field(default=15_000, alias="MAKER_REVERSION_MAX_HOLD_MS")
+    maker_reversion_max_ofi: float = Field(default=0.20, alias="MAKER_REVERSION_MAX_OFI")
+    maker_reversion_max_aggression: float = Field(default=0.20, alias="MAKER_REVERSION_MAX_AGGRESSION")
+    maker_reversion_max_vol_60s_pct: float = Field(default=0.0008, alias="MAKER_REVERSION_MAX_VOL_60S_PCT")
+    maker_reversion_max_spread_std_bps: float = Field(default=0.25, alias="MAKER_REVERSION_MAX_SPREAD_STD_BPS")
+    maker_reversion_max_spread_bps: float = Field(default=1.2, alias="MAKER_REVERSION_MAX_SPREAD_BPS")
+    maker_reversion_min_queue_score: float = Field(default=0.55, alias="MAKER_REVERSION_MIN_QUEUE_SCORE")
     taker_impulse_min_ofi_1s: float = Field(default=0.55, alias="TAKER_IMPULSE_MIN_OFI_1S")
     taker_impulse_min_ofi_5s: float = Field(default=0.25, alias="TAKER_IMPULSE_MIN_OFI_5S")
     taker_impulse_min_aggression_1s: float = Field(default=0.55, alias="TAKER_IMPULSE_MIN_AGGRESSION_1S")

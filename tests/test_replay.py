@@ -441,3 +441,74 @@ def test_hostile_replay_approximates_maker_queue_rejection(tmp_path, monkeypatch
     assert summary.hostile_replay is not None
     assert summary.hostile_replay.maker_queue_rejections == 1
 
+
+def test_hostile_replay_applies_maker_adverse_selection_penalty(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw_ws"
+    raw_dir.mkdir(parents=True)
+    path = raw_dir / "BTCUSDT_fixture_2026-05-03.jsonl"
+    start = datetime(2026, 5, 3, 8, 0, tzinfo=timezone.utc)
+    with path.open("w", encoding="utf-8") as handle:
+        for idx, price in enumerate([100.0, 101.0]):
+            ts = start + timedelta(seconds=idx)
+            _write_row(
+                handle,
+                ts,
+                {
+                    "e": "bookTicker",
+                    "E": int(ts.timestamp() * 1000),
+                    "b": str(price - 0.01),
+                    "a": str(price + 0.01),
+                    "B": "12",
+                    "A": "8",
+                },
+            )
+
+    class FakeStrategy:
+        def __init__(self, settings):
+            self._proposed = False
+
+        def decide(self, market):
+            if self._proposed:
+                return Decision(symbol="BTCUSDT", action=DecisionAction.wait, confidence=0.0, reason="test")
+            self._proposed = True
+            return Decision(
+                symbol="BTCUSDT",
+                action=DecisionAction.propose_long,
+                mode=TradeMode.fast,
+                confidence=0.95,
+                reason="test",
+                entry_price=100.0,
+                take_profit_price=100.2,
+                stop_loss_price=99.5,
+                target_move_pct=0.002,
+                stop_move_pct=0.005,
+                leverage=200,
+            )
+
+    class FakeRisk:
+        def __init__(self, settings):
+            pass
+
+        def evaluate(self, decision, market, paper_state):
+            return RiskVerdict(allowed=decision.action == DecisionAction.propose_long, reason="test")
+
+    monkeypatch.setattr(replay_module, "HitAndRunStrategy", FakeStrategy)
+    monkeypatch.setattr(replay_module, "RiskEngine", FakeRisk)
+    settings = Settings(
+        DATA_DIR=str(tmp_path),
+        DEFAULT_ENTRY_ORDER_TYPE="maker",
+        DEFAULT_EXIT_ORDER_TYPE="maker",
+        HOSTILE_REPLAY_MAKER_QUEUE_FILL_PROBABILITY=1.0,
+        HOSTILE_REPLAY_MAKER_ADVERSE_SELECTION_BPS=10.0,
+        HOSTILE_REPLAY_LATENCY_PENALTY_BPS=0.0,
+        HOSTILE_REPLAY_LATENCY_BPS_PER_SECOND=0.0,
+        TAKER_FEE_BPS=0.0,
+    )
+
+    summary = replay_files(settings, [path], decision_interval_ms=100, flatten_at_end=True, hostile=True)
+
+    assert summary.paper_opens == 1
+    assert summary.hostile_replay is not None
+    assert summary.trades[0].entry_price > 99.99
+    assert summary.trades[0].exit_shadow["hostile_execution"]["latency_penalty_bps"] == 0.0
+
