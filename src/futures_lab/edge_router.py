@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from futures_lab.config import Settings
-from futures_lab.costs import estimate_effective_cost
+from futures_lab.costs import EffectiveCost, estimate_effective_cost
 from futures_lab.models import MarketState, Side
 
 
@@ -23,6 +23,7 @@ class EdgeCandidate:
     expected_ev_bps: float
     blockers: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    exit_plan: dict = field(default_factory=dict)
 
     @property
     def viable(self) -> bool:
@@ -45,6 +46,7 @@ class EdgeCandidate:
             "viable": self.viable,
             "blockers": self.blockers,
             "reasons": self.reasons,
+            "exit_plan": self.exit_plan,
         }
 
 
@@ -69,6 +71,7 @@ class EdgeRouter:
     ) -> dict:
         if not self.settings.edge_router_shadow_enabled:
             return {"enabled": False, "candidates": [], "selected": None}
+        mode = "paper_candidate" if self.settings.edge_router_paper_enabled else "shadow"
         candidates = self._microstructure_candidates(market)
         if baseline is not None:
             candidates.append(self._baseline_candidate(market, baseline))
@@ -80,7 +83,7 @@ class EdgeRouter:
         selected = next((candidate for candidate in candidates_sorted if candidate.viable), None)
         return {
             "enabled": True,
-            "mode": "shadow",
+            "mode": mode,
             "selected": selected.model_dump() if selected else None,
             "candidate_count": len(candidates_sorted),
             "viable_count": sum(1 for candidate in candidates_sorted if candidate.viable),
@@ -114,14 +117,16 @@ class EdgeRouter:
     def _taker_impulse_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:
         signed = self._signed_features(market, side)
         micro_score = self._bounded(
-            0.30 * self._positive_unit(signed["ofi_1s"])
-            + 0.22 * self._positive_unit(signed["aggression_1s"])
-            + 0.18 * self._positive_unit(signed["microprice_pressure"])
-            + 0.15 * self._positive_unit(signed["vamp_pressure"])
-            + 0.10 * self._positive_unit(signed["depth_pressure"])
-            + 0.05 * self._positive_unit(signed["refill_pressure"])
+            0.22 * self._positive_unit(signed["ofi_1s"])
+            + 0.14 * self._positive_unit(signed["ofi_5s"])
+            + 0.18 * self._positive_unit(signed["aggression_1s"])
+            + 0.12 * self._positive_unit(signed["aggression_5s"])
+            + 0.14 * self._positive_unit(signed["microprice_pressure"])
+            + 0.12 * self._positive_unit(signed["vamp_pressure"])
+            + 0.08 * self._positive_unit(signed["depth_pressure"])
         )
-        return self._build_candidate(
+        cost = estimate_effective_cost(self.settings, market)
+        candidate = self._build_candidate(
             market=market,
             strategy=f"taker_impulse_{side.value}",
             family="taker_impulse",
@@ -131,11 +136,19 @@ class EdgeRouter:
             max_hold_ms=self.settings.edge_router_impulse_max_hold_ms,
             score=micro_score,
             reasons=[
-                "OFI/aggression/microprice/VAMP/depth impulse score",
+                "OFI/aggression/microprice/VAMP/depth impulse score with 1s/5s agreement",
                 f"ofi_1s={market.order_flow_imbalance_1s}",
+                f"ofi_5s={market.order_flow_imbalance_5s}",
                 f"aggression_1s={market.taker_aggression_imbalance_1s}",
+                f"aggression_5s={market.taker_aggression_imbalance_5s}",
             ],
+            cost=cost,
+            exit_plan=self._taker_impulse_exit_plan(cost),
         )
+        blockers = self._taker_impulse_blockers(market, signed)
+        if blockers:
+            return self._with_blockers(candidate, blockers)
+        return candidate
 
     def _liquidation_continuation_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:
         relevant_liq = self._continuation_liquidation_notional(market, side)
@@ -199,8 +212,10 @@ class EdgeRouter:
         max_hold_ms: int,
         score: float,
         reasons: list[str],
+        cost: EffectiveCost | None = None,
+        exit_plan: dict | None = None,
     ) -> EdgeCandidate:
-        cost = estimate_effective_cost(self.settings, market)
+        cost = cost or estimate_effective_cost(self.settings, market)
         p_hit = self._bounded(score)
         ev = p_hit * target_bps - (1.0 - p_hit) * stop_bps - cost.total_cost_bps
         blockers = self._base_blockers(market, side, target_bps, cost.total_cost_bps, score, ev)
@@ -219,7 +234,38 @@ class EdgeRouter:
             expected_ev_bps=ev,
             blockers=blockers,
             reasons=reasons,
+            exit_plan=exit_plan or self._default_exit_plan(max_hold_ms),
         )
+
+    def _taker_impulse_blockers(self, market: MarketState, signed: dict[str, float]) -> list[str]:
+        blockers = []
+        if signed["ofi_1s"] < self.settings.taker_impulse_min_ofi_1s:
+            blockers.append("impulse_ofi_1s_not_aligned")
+        if signed["ofi_5s"] < self.settings.taker_impulse_min_ofi_5s:
+            blockers.append("impulse_ofi_5s_not_aligned")
+        if signed["aggression_1s"] < self.settings.taker_impulse_min_aggression_1s:
+            blockers.append("impulse_aggression_1s_not_aligned")
+        if signed["aggression_5s"] < self.settings.taker_impulse_min_aggression_5s:
+            blockers.append("impulse_aggression_5s_not_aligned")
+        if signed["microprice_mid_bps"] <= self.settings.taker_impulse_min_pressure_bps:
+            blockers.append("impulse_microprice_not_on_side")
+        if signed["vamp_mid_bps"] <= self.settings.taker_impulse_min_pressure_bps:
+            blockers.append("impulse_vamp_not_on_side")
+        depth_pressure_ok = signed["depth_pressure"] >= self.settings.taker_impulse_min_depth_pressure
+        refill_pressure_ok = signed["refill_pressure"] >= self.settings.taker_impulse_min_refill_pressure
+        if not (depth_pressure_ok or refill_pressure_ok):
+            blockers.append("impulse_depth_not_thinning_or_refilling")
+        if market.spread_bps is None or market.spread_bps > self.settings.taker_impulse_max_spread_bps:
+            blockers.append("impulse_spread_too_wide")
+        if (
+            market.spread_bps_std_5s is not None
+            and market.spread_bps_std_5s > self.settings.taker_impulse_max_spread_std_bps
+        ):
+            blockers.append("impulse_spread_unstable")
+        lag_ms = market.avg_event_lag_30s_ms if market.avg_event_lag_30s_ms is not None else market.exchange_event_lag_ms
+        if lag_ms is not None and lag_ms > self.settings.taker_impulse_max_event_lag_ms:
+            blockers.append("impulse_book_lagged")
+        return blockers
 
     def _base_blockers(
         self,
@@ -258,7 +304,11 @@ class EdgeRouter:
         refill_pressure = (bid_refill + ask_evap) if side == Side.long else (ask_refill + bid_evap)
         return {
             "ofi_1s": sign * (market.order_flow_imbalance_1s or 0.0),
+            "ofi_5s": sign * (market.order_flow_imbalance_5s or 0.0),
             "aggression_1s": sign * (market.taker_aggression_imbalance_1s or 0.0),
+            "aggression_5s": sign * (market.taker_aggression_imbalance_5s or 0.0),
+            "microprice_mid_bps": sign * (market.microprice_mid_bps or 0.0),
+            "vamp_mid_bps": sign * (market.vamp_mid_bps or 0.0),
             "microprice_pressure": sign * self._scaled_bps(market.microprice_mid_bps, market.spread_bps),
             "vamp_pressure": sign * self._scaled_bps(market.vamp_mid_bps, market.spread_bps),
             "depth_pressure": sign * (market.depth_imbalance_top5 or market.book_imbalance_top or 0.0),
@@ -276,6 +326,9 @@ class EdgeRouter:
         return market.short_liquidation_notional_30s or 0.0
 
     def _with_blocker(self, candidate: EdgeCandidate, blocker: str) -> EdgeCandidate:
+        return self._with_blockers(candidate, [blocker])
+
+    def _with_blockers(self, candidate: EdgeCandidate, blockers: list[str]) -> EdgeCandidate:
         return EdgeCandidate(
             strategy=candidate.strategy,
             family=candidate.family,
@@ -289,9 +342,31 @@ class EdgeRouter:
             score=candidate.score,
             p_hit_tp_before_sl=candidate.p_hit_tp_before_sl,
             expected_ev_bps=candidate.expected_ev_bps,
-            blockers=sorted(set(candidate.blockers + [blocker])),
+            blockers=sorted(set(candidate.blockers + blockers)),
             reasons=candidate.reasons,
+            exit_plan=candidate.exit_plan,
         )
+
+    def _default_exit_plan(self, max_hold_ms: int) -> dict:
+        return {
+            "baseline": "fixed_tp_stop",
+            "timeout_ms": max_hold_ms,
+        }
+
+    def _taker_impulse_exit_plan(self, cost: EffectiveCost) -> dict:
+        trail_activation_bps = cost.total_cost_bps * self.settings.taker_impulse_trail_activation_cost_multiple
+        return {
+            "baseline": "fixed_tp_stop",
+            "preferred": "mfe_trailing_stop_after_cost_paid",
+            "trail_activation_bps": round(trail_activation_bps, 4),
+            "soft_exit_signals": [
+                "ofi_flip",
+                "microprice_reclaims_or_loses_mid",
+                "spread_expansion",
+                "exit_side_depth_disappears",
+            ],
+            "timeout_ms": self.settings.edge_router_impulse_max_hold_ms,
+        }
 
     def _positive_unit(self, value: float) -> float:
         return self._bounded((value + 1.0) / 2.0)

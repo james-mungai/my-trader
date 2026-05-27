@@ -90,25 +90,25 @@ Goal: make ETHUSDT taker impulse continuation the first primary microstructure s
 
 Entry concept:
 
-- [ ] HTF is aligned or non-hostile.
-- [ ] Book is fresh and synchronized enough for local state.
-- [ ] Spread is below profile threshold.
-- [ ] OFI and taker aggression agree over `1s` and `5s`.
-- [ ] Microprice and VAMP are on the trade side of mid.
-- [ ] Opposite-side depth is thinning or failing to refill.
-- [ ] Expected target clears total cost multiple.
+- [x] HTF is aligned or non-hostile.
+- [x] Book is fresh and synchronized enough for local state.
+- [x] Spread is below profile threshold.
+- [x] OFI and taker aggression agree over `1s` and `5s`.
+- [x] Microprice and VAMP are on the trade side of mid.
+- [x] Opposite-side depth is thinning or failing to refill.
+- [x] Expected target clears total cost multiple.
 
 Exit concept:
 
-- [ ] Fixed TP/stop remains baseline.
-- [ ] MFE trailing activates only after gross move clears estimated round-trip cost.
-- [ ] Soft exit on OFI flip, microprice reclaim/loss, spread expansion, or depth disappearance.
-- [ ] Timeout if impulse does not pay quickly.
+- [x] Fixed TP/stop remains baseline.
+- [x] MFE trailing activates only after gross move clears estimated round-trip cost.
+- [x] Soft exit on OFI flip, microprice reclaim/loss, spread expansion, or depth disappearance.
+- [x] Timeout if impulse does not pay quickly.
 
 Acceptance:
 
-- [ ] Shadow-only mode can score impulse candidates for at least one recon run.
-- [ ] Paper mode can be enabled by env flag after shadow metrics look sane.
+- [x] Shadow-only mode can score impulse candidates for at least one recon run.
+- [x] Paper mode can be enabled by env flag after shadow metrics look sane.
 
 ## Stage 5 - Liquidation Phase State Machine
 

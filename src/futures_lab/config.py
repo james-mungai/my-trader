@@ -193,6 +193,21 @@ class Settings(BaseSettings):
     edge_router_target_cost_multiple: float = Field(default=2.0, alias="EDGE_ROUTER_TARGET_COST_MULTIPLE")
     edge_router_impulse_max_hold_ms: int = Field(default=20_000, alias="EDGE_ROUTER_IMPULSE_MAX_HOLD_MS")
     edge_router_liquidation_max_hold_ms: int = Field(default=30_000, alias="EDGE_ROUTER_LIQUIDATION_MAX_HOLD_MS")
+    edge_router_paper_enabled: bool = Field(default=False, alias="EDGE_ROUTER_PAPER_ENABLED")
+    taker_impulse_min_ofi_1s: float = Field(default=0.55, alias="TAKER_IMPULSE_MIN_OFI_1S")
+    taker_impulse_min_ofi_5s: float = Field(default=0.25, alias="TAKER_IMPULSE_MIN_OFI_5S")
+    taker_impulse_min_aggression_1s: float = Field(default=0.55, alias="TAKER_IMPULSE_MIN_AGGRESSION_1S")
+    taker_impulse_min_aggression_5s: float = Field(default=0.20, alias="TAKER_IMPULSE_MIN_AGGRESSION_5S")
+    taker_impulse_min_pressure_bps: float = Field(default=0.0, alias="TAKER_IMPULSE_MIN_PRESSURE_BPS")
+    taker_impulse_min_depth_pressure: float = Field(default=0.20, alias="TAKER_IMPULSE_MIN_DEPTH_PRESSURE")
+    taker_impulse_min_refill_pressure: float = Field(default=0.10, alias="TAKER_IMPULSE_MIN_REFILL_PRESSURE")
+    taker_impulse_max_spread_bps: float = Field(default=1.5, alias="TAKER_IMPULSE_MAX_SPREAD_BPS")
+    taker_impulse_max_spread_std_bps: float = Field(default=0.75, alias="TAKER_IMPULSE_MAX_SPREAD_STD_BPS")
+    taker_impulse_max_event_lag_ms: float = Field(default=750.0, alias="TAKER_IMPULSE_MAX_EVENT_LAG_MS")
+    taker_impulse_trail_activation_cost_multiple: float = Field(
+        default=1.2,
+        alias="TAKER_IMPULSE_TRAIL_ACTIVATION_COST_MULTIPLE",
+    )
     daily_target_usd: float = Field(default=150.0, alias="DAILY_TARGET_USD")
     daily_max_loss_usd: float = Field(default=75.0, alias="DAILY_MAX_LOSS_USD")
     max_trades_per_day: int = Field(default=0, alias="MAX_TRADES_PER_DAY")

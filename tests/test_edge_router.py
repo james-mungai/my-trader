@@ -15,6 +15,7 @@ def _market(**overrides) -> MarketState:
         "best_ask_qty": 20.0,
         "mid_price": 100.005,
         "spread_bps": 0.5,
+        "spread_bps_std_5s": 0.05,
         "last_trade_price": 100.0,
         "mark_price": 100.0,
         "funding_rate": 0.0,
@@ -43,6 +44,7 @@ def _market(**overrides) -> MarketState:
         "ask_depth_evaporation_rate_5s": 0.02,
         "higher_timeframe_bias_side": "short",
         "higher_timeframe_bias_strength": 0.72,
+        "avg_event_lag_30s_ms": 20.0,
         "regime": Regime.directional,
     }
     base.update(overrides)
@@ -60,6 +62,9 @@ def test_router_selects_viable_taker_impulse_short():
     assert result["selected"]["strategy"] == "taker_impulse_short"
     assert result["selected"]["side"] == "short"
     assert result["selected"]["viable"] is True
+    assert result["selected"]["exit_plan"]["baseline"] == "fixed_tp_stop"
+    assert result["selected"]["exit_plan"]["preferred"] == "mfe_trailing_stop_after_cost_paid"
+    assert "ofi_flip" in result["selected"]["exit_plan"]["soft_exit_signals"]
     assert any(candidate["strategy"] == "taker_impulse_long" for candidate in result["candidates"])
 
 
@@ -78,6 +83,40 @@ def test_router_blocks_target_when_cost_multiple_fails():
 
     assert impulse_short["viable"] is False
     assert "target_below_cost_multiple" in impulse_short["blockers"]
+
+
+def test_taker_impulse_requires_one_and_five_second_confirmation():
+    router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
+
+    result = router.evaluate(
+        _market(
+            order_flow_imbalance_5s=0.10,
+            taker_aggression_imbalance_5s=0.05,
+        )
+    )
+    impulse_short = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "taker_impulse_short")
+
+    assert impulse_short["viable"] is False
+    assert "impulse_ofi_5s_not_aligned" in impulse_short["blockers"]
+    assert "impulse_aggression_5s_not_aligned" in impulse_short["blockers"]
+
+
+def test_taker_impulse_blocks_unstable_or_lagged_book():
+    router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
+
+    result = router.evaluate(_market(spread_bps_std_5s=1.2, avg_event_lag_30s_ms=900.0))
+    impulse_short = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "taker_impulse_short")
+
+    assert "impulse_spread_unstable" in impulse_short["blockers"]
+    assert "impulse_book_lagged" in impulse_short["blockers"]
+
+
+def test_router_can_report_paper_candidate_mode_without_executing():
+    router = EdgeRouter(Settings(EDGE_ROUTER_PAPER_ENABLED=True, EDGE_ROUTER_MIN_EV_BPS=0.0))
+
+    result = router.evaluate(_market())
+
+    assert result["mode"] == "paper_candidate"
 
 
 def test_liquidation_continuation_requires_relevant_pulse():
