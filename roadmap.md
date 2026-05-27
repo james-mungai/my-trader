@@ -59,19 +59,19 @@ Acceptance:
 
 Goal: split one blended strategy into explicit deterministic candidates.
 
-- [ ] Add candidate model with side, family, target bps, stop bps, max hold, expected cost, score, EV proxy, and blockers.
-- [ ] Implement router that evaluates candidates and chooses highest viable EV candidate.
-- [ ] Keep current `stateful_momentum` path as a fallback/baseline candidate.
-- [ ] Log all rejected candidates so rejected-vs-accepted quality can be measured.
+- [x] Add candidate model with side, family, target bps, stop bps, max hold, expected cost, score, EV proxy, and blockers.
+- [x] Implement router that evaluates candidates and chooses highest viable EV candidate.
+- [x] Keep current `stateful_momentum` path as a fallback/baseline candidate.
+- [x] Log all rejected candidates so rejected-vs-accepted quality can be measured.
 
 Initial candidates:
 
-- [ ] `taker_impulse_long`
-- [ ] `taker_impulse_short`
-- [ ] `liquidation_continuation_long`
-- [ ] `liquidation_continuation_short`
-- [ ] `liquidation_exhaustion_bounce_long`
-- [ ] `liquidation_exhaustion_bounce_short`
+- [x] `taker_impulse_long`
+- [x] `taker_impulse_short`
+- [x] `liquidation_continuation_long`
+- [x] `liquidation_continuation_short`
+- [x] `liquidation_exhaustion_bounce_long`
+- [x] `liquidation_exhaustion_bounce_short`
 
 Deferred candidates:
 
@@ -80,9 +80,9 @@ Deferred candidates:
 
 Acceptance:
 
-- [ ] Decisions include candidate table/evidence.
-- [ ] Only one accepted candidate can open a paper position at a time.
-- [ ] Rejected candidates are persisted for later scoring.
+- [x] Decisions include candidate table/evidence.
+- [x] Only one accepted candidate can open a paper position at a time.
+- [x] Rejected candidates are persisted for later scoring.
 
 ## Stage 4 - Taker Impulse Continuation
 

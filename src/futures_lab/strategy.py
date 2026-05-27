@@ -2,8 +2,9 @@ from dataclasses import dataclass, field
 
 from futures_lab.config import Settings
 from futures_lab.costs import estimate_effective_cost
+from futures_lab.edge_router import BaselineCandidateInput, EdgeRouter
 from futures_lab.markov import MarketRegimeSnapshot, MarketStateMachine
-from futures_lab.models import Decision, DecisionAction, MarketState, Regime, TradeMode
+from futures_lab.models import Decision, DecisionAction, MarketState, Regime, Side, TradeMode
 
 
 @dataclass
@@ -20,10 +21,12 @@ class HitAndRunStrategy:
     settings: Settings
     sequence: MarketStateMachine = field(init=False)
     recent_stateful_signals: dict[str, dict] = field(init=False)
+    edge_router: EdgeRouter = field(init=False)
 
     def __post_init__(self) -> None:
         self.sequence = MarketStateMachine(history_size=self.settings.markov_state_history)
         self.recent_stateful_signals = {}
+        self.edge_router = EdgeRouter(self.settings)
 
     def decide(self, market: MarketState) -> Decision:
         variant = self.settings.strategy_variant.strip().lower()
@@ -68,6 +71,10 @@ class HitAndRunStrategy:
         stateful_filter = self._stateful_momentum_filter(variant, sequence_snapshot, market, long_score, short_score)
         if stateful_filter is not None:
             evidence["stateful_momentum_filter"] = stateful_filter
+        evidence["edge_router"] = self.edge_router.evaluate(
+            market,
+            baseline=self._edge_router_baseline(long_score=long_score, short_score=short_score),
+        )
 
         if long_score >= self._required_score("long", short_score, stateful_filter):
             sequence_blocker = self._sequence_blocker(variant, sequence_snapshot, DecisionAction.propose_long, stateful_filter)
@@ -128,6 +135,16 @@ class HitAndRunStrategy:
 
     def sequence_summary(self) -> dict:
         return self.sequence.model_dump()
+
+    def _edge_router_baseline(self, long_score: float, short_score: float) -> BaselineCandidateInput:
+        side = Side.long if long_score >= short_score else Side.short
+        return BaselineCandidateInput(
+            side=side,
+            score=max(long_score, short_score),
+            target_bps=self.settings.fast_target_move_pct * 10_000,
+            stop_bps=self.settings.fast_stop_move_pct * 10_000,
+            reasons=["current deterministic strategy score"],
+        )
 
     def _sequence_snapshot(self, market: MarketState) -> MarketRegimeSnapshot | None:
         if not self.settings.enable_markov_state_machine:

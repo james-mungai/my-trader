@@ -59,6 +59,29 @@ def test_strategy_proposes_fast_long_near_range_low():
     assert decision.take_profit_price > decision.entry_price
 
 
+def test_strategy_logs_shadow_edge_router_candidates():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, EDGE_ROUTER_SHADOW_ENABLED=True))
+
+    decision = strategy.decide(
+        _market(
+            order_flow_imbalance_1s=0.88,
+            taker_aggression_imbalance_1s=0.84,
+            microprice_mid_bps=0.30,
+            vamp_mid_bps=0.28,
+            depth_imbalance_top5=0.50,
+            bid_depth_refill_rate_5s=0.22,
+            ask_depth_evaporation_rate_5s=0.18,
+        )
+    )
+
+    edge_router = decision.evidence["edge_router"]
+    assert edge_router["enabled"] is True
+    assert edge_router["mode"] == "shadow"
+    assert edge_router["candidate_count"] == 7
+    assert any(candidate["strategy"] == "stateful_momentum_baseline" for candidate in edge_router["candidates"])
+    assert any(candidate["strategy"] == "taker_impulse_long" for candidate in edge_router["candidates"])
+
+
 def test_strategy_proposes_short_near_range_high():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70))
 
