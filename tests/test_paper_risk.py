@@ -245,3 +245,55 @@ def test_paper_trade_logs_exit_shadow_for_alternative_exit_policies():
     assert trade is not None
     assert trade.exit_shadow["policies"]["time_decay"]["exit_reason"] == "time_decay"
     assert trade.exit_shadow["policies"]["time_decay"]["net_pnl_usd"] > trade.exit_shadow["policies"]["fixed_tp_stop"]["net_pnl_usd"]
+
+
+def test_paper_mfe_trailing_exit_can_be_enabled_for_selected_profiles():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_EXIT_POLICY="mfe_trailing_stop",
+        PAPER_MFE_TRAILING_PROFILES="htf_aligned_fast",
+        PAPER_MFE_TRAIL_ACTIVATION_PCT=0.0015,
+        PAPER_MFE_TRAIL_DISTANCE_PCT=0.0010,
+        ENABLE_FAST_FAILURE_EXIT=False,
+    )
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market).model_copy(
+        update={"evidence": {"trade_profile": "htf_aligned_fast"}}
+    )
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert position.exit_policy == "mfe_trailing_stop"
+    assert broker.mark(_market(100.17), timestamp=opened_at + timedelta(seconds=30)) is None
+    trade = broker.mark(_market(100.06), timestamp=opened_at + timedelta(seconds=60))
+
+    assert trade is not None
+    assert trade.exit_reason == "mfe_trailing_stop"
+    assert trade.trade_profile == "htf_aligned_fast"
+    assert trade.exit_policy == "mfe_trailing_stop"
+    assert trade.exit_shadow["policies"]["mfe_trailing_stop"]["exit_reason"] == "mfe_trailing_stop"
+
+
+def test_paper_mfe_trailing_exit_ignores_profiles_outside_allowlist():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_EXIT_POLICY="mfe_trailing_stop",
+        PAPER_MFE_TRAILING_PROFILES="htf_aligned_fast",
+        PAPER_MFE_TRAIL_ACTIVATION_PCT=0.0015,
+        PAPER_MFE_TRAIL_DISTANCE_PCT=0.0010,
+        ENABLE_FAST_FAILURE_EXIT=False,
+    )
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market).model_copy(
+        update={"evidence": {"trade_profile": "weak_or_neutral_htf"}}
+    )
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert position.exit_policy == "fixed_tp_stop"
+    assert broker.mark(_market(100.17), timestamp=opened_at + timedelta(seconds=30)) is None
+    assert broker.mark(_market(100.06), timestamp=opened_at + timedelta(seconds=60)) is None

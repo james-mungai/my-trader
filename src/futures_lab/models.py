@@ -115,6 +115,8 @@ class PaperPosition(BaseModel):
     symbol: str
     side: Side
     mode: TradeMode
+    trade_profile: str = "unknown"
+    exit_policy: str = "fixed_tp_stop"
     entry_price: float
     quantity: float
     stake_usd: float
@@ -132,6 +134,8 @@ class PaperTrade(BaseModel):
     symbol: str
     side: Side
     mode: TradeMode
+    trade_profile: str = "unknown"
+    exit_policy: str = "fixed_tp_stop"
     entry_price: float
     exit_price: float
     quantity: float

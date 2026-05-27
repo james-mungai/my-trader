@@ -127,6 +127,8 @@ class TradingRuntime:
                             "symbol": opened.symbol,
                             "side": opened.side.value,
                             "mode": opened.mode.value,
+                            "trade_profile": opened.trade_profile,
+                            "exit_policy": opened.exit_policy,
                             "entry_price": opened.entry_price,
                             "take_profit_price": opened.take_profit_price,
                             "stop_loss_price": opened.stop_loss_price,

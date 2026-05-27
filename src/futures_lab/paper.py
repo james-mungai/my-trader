@@ -67,10 +67,14 @@ class PaperBroker:
         notional = stake * decision.leverage
         quantity = notional / decision.entry_price
         actual_opened_at = opened_at or utc_now()
+        trade_profile = str(decision.evidence.get("trade_profile") or decision.mode.value)
+        exit_policy = self._exit_policy_for_profile(trade_profile)
         self.open_position = PaperPosition(
             symbol=decision.symbol,
             side=side,
             mode=decision.mode,
+            trade_profile=trade_profile,
+            exit_policy=exit_policy,
             entry_price=decision.entry_price,
             quantity=quantity,
             stake_usd=stake,
@@ -114,6 +118,8 @@ class PaperBroker:
                 return self.close(market.mid_price, "take_profit", closed_at=current)
             if self.settings.enable_price_stop and market.mid_price >= pos.stop_loss_price:
                 return self.close(market.mid_price, "stop_loss", closed_at=current)
+        if self._should_close_mfe_trailing(pos, market):
+            return self.close(market.mid_price, "mfe_trailing_stop", closed_at=current)
         if pos.max_adverse_move_pct <= -abs(self.settings.emergency_max_adverse_move_pct):
             return self.close(market.mid_price, "emergency_adverse_move", closed_at=current)
         if self._should_close_fast_failure(pos, current):
@@ -143,6 +149,34 @@ class PaperBroker:
             return False
         return (current - pos.opened_at).total_seconds() >= self.settings.max_position_seconds
 
+    def _should_close_mfe_trailing(self, pos: PaperPosition, market: MarketState) -> bool:
+        if pos.exit_policy != "mfe_trailing_stop" or market.mid_price is None:
+            return False
+        if pos.max_favorable_move_pct < self.settings.paper_mfe_trail_activation_pct:
+            return False
+        trail_distance = max(
+            self.settings.paper_mfe_trail_distance_pct,
+            (market.realized_vol_60s_pct or 0.0) * self.settings.paper_mfe_trail_vol_multiplier,
+        )
+        return (pos.max_favorable_move_pct - self._move_pct(pos, market.mid_price)) >= trail_distance
+
+    def _move_pct(self, pos: PaperPosition, price: float) -> float:
+        direction = 1 if pos.side == Side.long else -1
+        return ((price - pos.entry_price) / pos.entry_price) * direction
+
+    def _exit_policy_for_profile(self, trade_profile: str) -> str:
+        policy = self.settings.paper_exit_policy.strip().lower()
+        if policy != "mfe_trailing_stop":
+            return "fixed_tp_stop"
+        allowed_profiles = {
+            item.strip()
+            for item in self.settings.paper_mfe_trailing_profiles.split(",")
+            if item.strip()
+        }
+        if allowed_profiles and trade_profile not in allowed_profiles:
+            return "fixed_tp_stop"
+        return "mfe_trailing_stop"
+
     def close(self, exit_price: float, reason: str, closed_at: datetime | None = None) -> PaperTrade:
         if self.open_position is None:
             raise ValueError("No paper position is open.")
@@ -159,6 +193,8 @@ class PaperBroker:
             symbol=pos.symbol,
             side=pos.side,
             mode=pos.mode,
+            trade_profile=pos.trade_profile,
+            exit_policy=pos.exit_policy,
             entry_price=pos.entry_price,
             exit_price=exit_price,
             quantity=pos.quantity,

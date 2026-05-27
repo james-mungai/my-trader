@@ -151,6 +151,14 @@ class Settings(BaseSettings):
         default=1.25,
         alias="EXIT_SHADOW_TIME_DECAY_MIN_MFE_FEE_MULTIPLE",
     )
+    paper_exit_policy: str = Field(default="fixed_tp_stop", alias="PAPER_EXIT_POLICY")
+    paper_mfe_trailing_profiles: str = Field(
+        default="htf_aligned_fast,eth_counter_htf_bounce",
+        alias="PAPER_MFE_TRAILING_PROFILES",
+    )
+    paper_mfe_trail_activation_pct: float = Field(default=0.0015, alias="PAPER_MFE_TRAIL_ACTIVATION_PCT")
+    paper_mfe_trail_distance_pct: float = Field(default=0.0010, alias="PAPER_MFE_TRAIL_DISTANCE_PCT")
+    paper_mfe_trail_vol_multiplier: float = Field(default=0.75, alias="PAPER_MFE_TRAIL_VOL_MULTIPLIER")
     regime_outcome_horizons_seconds: str = Field(default="15,30,60,180,300,900", alias="REGIME_OUTCOME_HORIZONS_SECONDS")
     regime_outcome_target_moves_pct: str = Field(default="0.001,0.002,0.0035,0.005", alias="REGIME_OUTCOME_TARGET_MOVES_PCT")
     regime_outcome_stop_moves_pct: str = Field(default="0.001,0.002", alias="REGIME_OUTCOME_STOP_MOVES_PCT")
