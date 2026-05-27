@@ -9,6 +9,7 @@ from typing import Iterable, Iterator, TextIO
 from futures_lab.audit import AuditLog
 from futures_lab.candidate_outcomes import CandidateOutcomeTracker
 from futures_lab.config import Settings
+from futures_lab.hostile_replay import HostileReplayBroker, HostileReplayStats
 from futures_lab.market_state import MarketStateBook
 from futures_lab.models import DecisionAction, MarketState, PaperPosition, PaperTrade, Side
 from futures_lab.paper import PaperBroker
@@ -113,6 +114,7 @@ class ReplayPositionStats:
 @dataclass
 class ReplaySummary:
     files: list[str]
+    replay_mode: str = "normal"
     messages: int = 0
     decisions: int = 0
     proposals: int = 0
@@ -136,6 +138,7 @@ class ReplaySummary:
     candidate_outcome_opens: int = 0
     candidate_outcome_closes: int = 0
     candidate_outcome_events: list[dict] = field(default_factory=list)
+    hostile_replay: HostileReplayStats | None = None
 
     @property
     def wins(self) -> int:
@@ -154,6 +157,7 @@ class ReplaySummary:
     def model_dump(self) -> dict:
         return {
             "files": self.files,
+            "replay_mode": self.replay_mode,
             "messages": self.messages,
             "decisions": self.decisions,
             "proposals": self.proposals,
@@ -180,6 +184,7 @@ class ReplaySummary:
             "candidate_outcome_opens": self.candidate_outcome_opens,
             "candidate_outcome_closes": self.candidate_outcome_closes,
             "candidate_outcome_events": self.candidate_outcome_events,
+            "hostile_replay": self.hostile_replay.model_dump() if self.hostile_replay else None,
         }
 
 
@@ -256,17 +261,23 @@ def replay_files(
     book_ticker_min_interval_ms: int = 100,
     flatten_at_end: bool = False,
     audit: AuditLog | None = None,
+    hostile: bool | None = None,
 ) -> ReplaySummary:
     path_list = [Path(path) for path in paths]
     state_book = MarketStateBook(settings)
     state_book.set_connected(True)
     strategy = HitAndRunStrategy(settings)
     risk = RiskEngine(settings)
-    paper = PaperBroker(settings)
+    hostile_enabled = settings.hostile_replay_enabled if hostile is None else hostile
+    paper = HostileReplayBroker(settings) if hostile_enabled else PaperBroker(settings)
     shadow = ShadowTradeTracker(settings)
     regime_outcomes = RegimeOutcomeTracker(settings)
     candidate_outcomes = CandidateOutcomeTracker(settings)
-    summary = ReplaySummary(files=[str(path) for path in path_list])
+    summary = ReplaySummary(
+        files=[str(path) for path in path_list],
+        replay_mode="hostile" if hostile_enabled else "normal",
+        hostile_replay=paper.stats if isinstance(paper, HostileReplayBroker) else None,
+    )
     interval_ms = decision_interval_ms if decision_interval_ms is not None else settings.decision_interval_ms
     last_sample_at: datetime | None = None
     active_stats: ReplayPositionStats | None = None
@@ -321,7 +332,10 @@ def replay_files(
             summary.proposals += 1
         if verdict.allowed:
             summary.risk_allowed += 1
-            opened = paper.open_from_decision(decision, opened_at=message.received_at)
+            if isinstance(paper, HostileReplayBroker):
+                opened = paper.open_from_decision(decision, market, opened_at=message.received_at)
+            else:
+                opened = paper.open_from_decision(decision, opened_at=message.received_at)
             if opened is not None:
                 summary.paper_opens += 1
                 active_stats = ReplayPositionStats.from_position(opened, settings)

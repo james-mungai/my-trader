@@ -143,15 +143,15 @@ Acceptance:
 
 Goal: make paper/replay fills harsher and closer to live trading.
 
-- [ ] Add taker fill at ask/bid plus configurable slippage.
-- [ ] Add latency injection for feed, decision, and order path.
-- [ ] Add stale-book rejection.
-- [ ] Add stop execution penalty under fast adverse movement.
-- [ ] Add optional maker queue approximation before any maker strategy is trusted.
+- [x] Add taker fill at ask/bid plus configurable slippage.
+- [x] Add latency injection for feed, decision, and order path.
+- [x] Add stale-book rejection.
+- [x] Add stop execution penalty under fast adverse movement.
+- [x] Add optional maker queue approximation before any maker strategy is trusted.
 
 Acceptance:
 
-- [ ] Replay can run in normal and hostile modes.
+- [x] Replay can run in normal and hostile modes.
 - [ ] Strategy must remain positive under hostile assumptions before live/demo consideration.
 
 ## Stage 8 - Cross-Market Confirmation

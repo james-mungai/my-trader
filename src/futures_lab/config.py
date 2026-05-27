@@ -168,6 +168,21 @@ class Settings(BaseSettings):
     regime_outcome_min_early_correct: int = Field(default=2, alias="REGIME_OUTCOME_MIN_EARLY_CORRECT")
     candidate_outcome_horizons_seconds: str = Field(default="1,3,5,10,30,60", alias="CANDIDATE_OUTCOME_HORIZONS_SECONDS")
     candidate_outcome_cooldown_seconds: int = Field(default=30, alias="CANDIDATE_OUTCOME_COOLDOWN_SECONDS")
+    hostile_replay_enabled: bool = Field(default=False, alias="HOSTILE_REPLAY_ENABLED")
+    hostile_replay_entry_slippage_bps: float = Field(default=1.0, alias="HOSTILE_REPLAY_ENTRY_SLIPPAGE_BPS")
+    hostile_replay_exit_slippage_bps: float = Field(default=1.0, alias="HOSTILE_REPLAY_EXIT_SLIPPAGE_BPS")
+    hostile_replay_stop_penalty_bps: float = Field(default=2.0, alias="HOSTILE_REPLAY_STOP_PENALTY_BPS")
+    hostile_replay_feed_latency_ms: int = Field(default=100, alias="HOSTILE_REPLAY_FEED_LATENCY_MS")
+    hostile_replay_decision_latency_ms: int = Field(default=50, alias="HOSTILE_REPLAY_DECISION_LATENCY_MS")
+    hostile_replay_order_latency_ms: int = Field(default=100, alias="HOSTILE_REPLAY_ORDER_LATENCY_MS")
+    hostile_replay_latency_penalty_bps: float = Field(default=0.5, alias="HOSTILE_REPLAY_LATENCY_PENALTY_BPS")
+    hostile_replay_latency_bps_per_second: float = Field(default=1.0, alias="HOSTILE_REPLAY_LATENCY_BPS_PER_SECOND")
+    hostile_replay_max_book_age_ms: int = Field(default=1_000, alias="HOSTILE_REPLAY_MAX_BOOK_AGE_MS")
+    hostile_replay_max_event_lag_ms: float = Field(default=1_000.0, alias="HOSTILE_REPLAY_MAX_EVENT_LAG_MS")
+    hostile_replay_maker_queue_fill_probability: float = Field(
+        default=0.25,
+        alias="HOSTILE_REPLAY_MAKER_QUEUE_FILL_PROBABILITY",
+    )
     max_spread_bps: float = Field(default=2.0, alias="MAX_SPREAD_BPS")
     min_confidence: float = Field(default=0.72, alias="MIN_CONFIDENCE")
     enable_price_stop: bool = Field(default=True, alias="ENABLE_PRICE_STOP")

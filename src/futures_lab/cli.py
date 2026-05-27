@@ -62,6 +62,7 @@ def replay(
     include_depth: bool,
     book_ticker_min_interval_ms: int,
     flatten_at_end: bool,
+    hostile: bool,
 ) -> None:
     settings = Settings()
     files = discover_raw_files(settings, pattern=pattern)
@@ -75,6 +76,7 @@ def replay(
         book_ticker_min_interval_ms=book_ticker_min_interval_ms,
         flatten_at_end=flatten_at_end,
         audit=AuditLog(settings),
+        hostile=hostile,
     )
     print(json.dumps(summary.model_dump(), indent=2, default=str))
 
@@ -86,6 +88,7 @@ def replay_compare(
     include_depth: bool,
     book_ticker_min_interval_ms: int,
     flatten_at_end: bool,
+    hostile: bool,
 ) -> None:
     rows = []
     for variant in variants:
@@ -100,10 +103,12 @@ def replay_compare(
             include_depth=include_depth,
             book_ticker_min_interval_ms=book_ticker_min_interval_ms,
             flatten_at_end=flatten_at_end,
+            hostile=hostile,
         )
         rows.append(
             {
                 "variant": variant,
+                "replay_mode": summary.replay_mode,
                 "files": len(files),
                 "messages": summary.messages,
                 "decisions": summary.decisions,
@@ -120,6 +125,7 @@ def replay_compare(
                 "open_position": summary.open_position.model_dump() if summary.open_position else None,
                 "net_unrealized_pnl_usd": summary.net_unrealized_pnl_usd,
                 "markov": summary.markov,
+                "hostile_replay": summary.hostile_replay.model_dump() if summary.hostile_replay else None,
             }
         )
     print(json.dumps(rows, indent=2, default=str))
@@ -142,6 +148,7 @@ def main() -> None:
     replay_parser.add_argument("--include-depth", action="store_true", help="Include depthUpdate messages. Off by default because current strategy does not consume them.")
     replay_parser.add_argument("--book-ticker-min-interval-ms", type=int, default=100)
     replay_parser.add_argument("--flatten-at-end", action="store_true", help="Close any open paper position at the final replay price for session accounting.")
+    replay_parser.add_argument("--hostile", action="store_true", help="Use pessimistic replay fills, latency penalties, and stale-book rejection.")
 
     compare_parser = sub.add_parser("replay-compare", help="Replay the same raw data across strategy variants.")
     compare_parser.add_argument("--pattern", default=None, help="Glob under data/raw_ws.")
@@ -154,6 +161,7 @@ def main() -> None:
     compare_parser.add_argument("--include-depth", action="store_true")
     compare_parser.add_argument("--book-ticker-min-interval-ms", type=int, default=100)
     compare_parser.add_argument("--flatten-at-end", action="store_true")
+    compare_parser.add_argument("--hostile", action="store_true", help="Use hostile replay assumptions for every variant.")
 
     data_summary_parser = sub.add_parser("data-summary", help="Summarize recon data storage.")
     data_summary_parser.add_argument("--largest", type=int, default=20)
@@ -184,6 +192,7 @@ def main() -> None:
             include_depth=args.include_depth,
             book_ticker_min_interval_ms=args.book_ticker_min_interval_ms,
             flatten_at_end=args.flatten_at_end,
+            hostile=args.hostile,
         )
     elif args.command == "replay-compare":
         replay_compare(
@@ -193,6 +202,7 @@ def main() -> None:
             include_depth=args.include_depth,
             book_ticker_min_interval_ms=args.book_ticker_min_interval_ms,
             flatten_at_end=args.flatten_at_end,
+            hostile=args.hostile,
         )
     elif args.command == "data-summary":
         print(json.dumps(summarize_data(Settings(), largest=args.largest).model_dump(), indent=2))
