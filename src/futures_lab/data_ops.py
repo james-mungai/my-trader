@@ -219,6 +219,129 @@ def summarize_regime_outcomes(settings: Settings) -> RegimeOutcomeSummary:
 
 
 @dataclass
+class CandidateOutcomeBucket:
+    samples: int = 0
+    accepted: int = 0
+    rejected: int = 0
+    target_first: int = 0
+    stop_first: int = 0
+    timeout: int = 0
+    soft_invalidation_first: int = 0
+    total_mfe_60s_pct: float = 0.0
+    total_mae_60s_pct: float = 0.0
+
+    def model_dump(self) -> dict:
+        return {
+            "samples": self.samples,
+            "accepted": self.accepted,
+            "rejected": self.rejected,
+            "target_first": self.target_first,
+            "stop_first": self.stop_first,
+            "timeout": self.timeout,
+            "soft_invalidation_first": self.soft_invalidation_first,
+            "avg_mfe_60s_pct": round(self.total_mfe_60s_pct / self.samples, 6) if self.samples else None,
+            "avg_mae_60s_pct": round(self.total_mae_60s_pct / self.samples, 6) if self.samples else None,
+        }
+
+
+@dataclass
+class CandidateOutcomeSummary:
+    data_dir: str
+    files: int = 0
+    opens: int = 0
+    closes: int = 0
+    accepted_vs_rejected: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
+    strategies: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
+    score_buckets: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
+    target_before_stop: dict[str, dict[str, int]] = field(default_factory=dict)
+    outcome_labels: dict[str, int] = field(default_factory=dict)
+
+    def model_dump(self) -> dict:
+        return {
+            "data_dir": self.data_dir,
+            "files": self.files,
+            "opens": self.opens,
+            "closes": self.closes,
+            "accepted_vs_rejected": {name: bucket.model_dump() for name, bucket in self.accepted_vs_rejected.items()},
+            "strategies": {name: bucket.model_dump() for name, bucket in self.strategies.items()},
+            "score_buckets": {name: bucket.model_dump() for name, bucket in self.score_buckets.items()},
+            "target_before_stop": self.target_before_stop,
+            "outcome_labels": self.outcome_labels,
+        }
+
+
+def summarize_candidate_outcomes(settings: Settings) -> CandidateOutcomeSummary:
+    outcome_dir = Path(settings.data_dir) / "candidate_outcomes"
+    summary = CandidateOutcomeSummary(data_dir=str(settings.data_dir))
+    if not outcome_dir.exists():
+        return summary
+
+    target_before_stop: dict[str, Counter[str]] = {}
+    outcome_labels: Counter[str] = Counter()
+    for path in sorted(outcome_dir.glob("*.jsonl")):
+        summary.files += 1
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                event = row.get("event")
+                if event == "open":
+                    summary.opens += 1
+                    continue
+                if event != "close":
+                    continue
+                summary.closes += 1
+                accepted_key = "accepted" if row.get("accepted") else "rejected"
+                strategy_key = str(row.get("strategy") or "unknown")
+                score_key = _score_bucket(float(row.get("score") or 0.0))
+                for bucket in [
+                    summary.accepted_vs_rejected.setdefault(accepted_key, CandidateOutcomeBucket()),
+                    summary.strategies.setdefault(strategy_key, CandidateOutcomeBucket()),
+                    summary.score_buckets.setdefault(score_key, CandidateOutcomeBucket()),
+                ]:
+                    _update_candidate_bucket(bucket, row)
+                outcome_labels[str(row.get("outcome_label") or "unknown")] += 1
+                for target, stops in (row.get("target_before_stop") or {}).items():
+                    target_counter = target_before_stop.setdefault(target, Counter())
+                    for stop, result in stops.items():
+                        if result is True:
+                            target_counter[stop] += 1
+
+    summary.target_before_stop = {target: dict(counter) for target, counter in target_before_stop.items()}
+    summary.outcome_labels = dict(outcome_labels)
+    return summary
+
+
+def _update_candidate_bucket(bucket: CandidateOutcomeBucket, row: dict) -> None:
+    bucket.samples += 1
+    if row.get("accepted"):
+        bucket.accepted += 1
+    else:
+        bucket.rejected += 1
+    label = str(row.get("outcome_label") or "")
+    if label == "target_first":
+        bucket.target_first += 1
+    elif label == "stop_first":
+        bucket.stop_first += 1
+    elif label == "timeout":
+        bucket.timeout += 1
+    elif label == "soft_invalidation_first":
+        bucket.soft_invalidation_first += 1
+    horizon = (row.get("mfe_mae_horizons") or {}).get("60") or {}
+    bucket.total_mfe_60s_pct += float(horizon.get("mfe_pct") or row.get("max_favorable_move_pct") or 0.0)
+    bucket.total_mae_60s_pct += float(horizon.get("mae_pct") or row.get("max_adverse_move_pct") or 0.0)
+
+
+def _score_bucket(score: float) -> str:
+    if score >= 0.85:
+        return "score_0.85_plus"
+    if score >= 0.70:
+        return "score_0.70_to_0.85"
+    return "score_below_0.70"
+
+
+@dataclass
 class ExitShadowPolicySummary:
     samples: int = 0
     wins: int = 0

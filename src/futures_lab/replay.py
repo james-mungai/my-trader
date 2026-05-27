@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, TextIO
 
 from futures_lab.audit import AuditLog
+from futures_lab.candidate_outcomes import CandidateOutcomeTracker
 from futures_lab.config import Settings
 from futures_lab.market_state import MarketStateBook
 from futures_lab.models import DecisionAction, MarketState, PaperPosition, PaperTrade, Side
@@ -132,6 +133,9 @@ class ReplaySummary:
     regime_outcome_opens: int = 0
     regime_outcome_closes: int = 0
     regime_outcome_events: list[dict] = field(default_factory=list)
+    candidate_outcome_opens: int = 0
+    candidate_outcome_closes: int = 0
+    candidate_outcome_events: list[dict] = field(default_factory=list)
 
     @property
     def wins(self) -> int:
@@ -173,6 +177,9 @@ class ReplaySummary:
             "regime_outcome_opens": self.regime_outcome_opens,
             "regime_outcome_closes": self.regime_outcome_closes,
             "regime_outcome_events": self.regime_outcome_events,
+            "candidate_outcome_opens": self.candidate_outcome_opens,
+            "candidate_outcome_closes": self.candidate_outcome_closes,
+            "candidate_outcome_events": self.candidate_outcome_events,
         }
 
 
@@ -258,6 +265,7 @@ def replay_files(
     paper = PaperBroker(settings)
     shadow = ShadowTradeTracker(settings)
     regime_outcomes = RegimeOutcomeTracker(settings)
+    candidate_outcomes = CandidateOutcomeTracker(settings)
     summary = ReplaySummary(files=[str(path) for path in path_list])
     interval_ms = decision_interval_ms if decision_interval_ms is not None else settings.decision_interval_ms
     last_sample_at: datetime | None = None
@@ -302,6 +310,9 @@ def replay_files(
         for event in regime_outcomes.mark(market, timestamp=message.received_at):
             summary.regime_outcome_closes += 1
             summary.regime_outcome_events.append(event)
+        for event in candidate_outcomes.mark(market, timestamp=message.received_at):
+            summary.candidate_outcome_closes += 1
+            summary.candidate_outcome_events.append(event)
 
         decision = strategy.decide(market)
         verdict = risk.evaluate(decision, market, paper.state())
@@ -323,6 +334,9 @@ def replay_files(
         if regime_opened is not None:
             summary.regime_outcome_opens += 1
             summary.regime_outcome_events.append(regime_opened)
+        for event in candidate_outcomes.open_from_decision(decision, market, opened_at=message.received_at):
+            summary.candidate_outcome_opens += 1
+            summary.candidate_outcome_events.append(event)
 
     if flatten_at_end and paper.open_position is not None and last_market is not None and last_market.mid_price is not None:
         if active_stats is not None:
@@ -343,6 +357,9 @@ def replay_files(
         for event in regime_outcomes.close_all(last_market, reason="session_end", timestamp=last_message_at):
             summary.regime_outcome_closes += 1
             summary.regime_outcome_events.append(event)
+        for event in candidate_outcomes.close_all(last_market, reason="session_end", timestamp=last_message_at):
+            summary.candidate_outcome_closes += 1
+            summary.candidate_outcome_events.append(event)
 
     if active_stats is not None and paper.open_position is not None:
         if last_market is not None:

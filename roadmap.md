@@ -129,15 +129,15 @@ Acceptance:
 
 Goal: score regimes and candidates by what happens first after costs.
 
-- [ ] Record MFE/MAE at `1s`, `3s`, `5s`, `10s`, `30s`, `60s`.
-- [ ] Add candidate outcome labels: target first, stop first, timeout, soft invalidation first.
-- [ ] Add cost-adjusted target-before-stop matrix.
-- [ ] Compare accepted candidates against rejected candidates.
+- [x] Record MFE/MAE at `1s`, `3s`, `5s`, `10s`, `30s`, `60s`.
+- [x] Add candidate outcome labels: target first, stop first, timeout, soft invalidation first.
+- [x] Add cost-adjusted target-before-stop matrix.
+- [x] Compare accepted candidates against rejected candidates.
 
 Acceptance:
 
-- [ ] Summary command reports accepted-vs-rejected quality.
-- [ ] Higher-score candidates outperform lower-score candidates over replay windows.
+- [x] Summary command reports accepted-vs-rejected quality.
+- [x] Higher-score candidates outperform lower-score candidates over replay windows.
 
 ## Stage 7 - Hostile Replay
 

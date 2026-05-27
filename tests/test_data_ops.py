@@ -2,7 +2,14 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from futures_lab.config import Settings
-from futures_lab.data_ops import compress_raw, prune_raw, summarize_data, summarize_exit_shadow, summarize_regime_outcomes
+from futures_lab.data_ops import (
+    compress_raw,
+    prune_raw,
+    summarize_candidate_outcomes,
+    summarize_data,
+    summarize_exit_shadow,
+    summarize_regime_outcomes,
+)
 
 
 def test_data_summary_compresses_and_prunes_raw_files(tmp_path):
@@ -84,3 +91,33 @@ def test_exit_shadow_summary_counts_policy_edges(tmp_path):
     assert summary.policies["time_decay"].net_vs_fixed_usd == 42
     assert summary.policies["time_decay"].improved_vs_fixed == 1
     assert summary.policies["fixed_tp_stop"].exit_reasons == {"actual_stop_loss": 1}
+
+
+def test_candidate_outcome_summary_compares_accepted_and_rejected(tmp_path):
+    outcome_dir = tmp_path / "candidate_outcomes"
+    outcome_dir.mkdir(parents=True)
+    path = outcome_dir / "ETHUSDT_candidate_outcomes_2026-05-27.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                '{"event":"open","strategy":"taker_impulse_long","side":"long","accepted":true}',
+                '{"event":"close","strategy":"taker_impulse_long","side":"long","accepted":true,"score":0.88,'
+                '"outcome_label":"target_first","target_before_stop":{"cost_adjusted":{"gross":true}},'
+                '"mfe_mae_horizons":{"60":{"mfe_pct":0.002,"mae_pct":-0.0002}}}',
+                '{"event":"close","strategy":"taker_impulse_short","side":"short","accepted":false,"score":0.42,'
+                '"outcome_label":"stop_first","target_before_stop":{"cost_adjusted":{"gross":false}},'
+                '"mfe_mae_horizons":{"60":{"mfe_pct":0.0004,"mae_pct":-0.001}}}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_candidate_outcomes(Settings(DATA_DIR=str(tmp_path)))
+
+    assert summary.opens == 1
+    assert summary.closes == 2
+    assert summary.accepted_vs_rejected["accepted"].target_first == 1
+    assert summary.accepted_vs_rejected["rejected"].stop_first == 1
+    assert summary.target_before_stop == {"cost_adjusted": {"gross": 1}}
+    assert summary.score_buckets["score_0.85_plus"].target_first == 1
+    assert summary.score_buckets["score_below_0.70"].stop_first == 1
