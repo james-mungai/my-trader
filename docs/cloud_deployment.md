@@ -5,16 +5,17 @@ orders, no real keys, and no discretionary execution.
 
 ## Recommended First AWS Path
 
-Use **AWS Lightsail Containers in Tokyo** first:
+Use **AWS Lightsail in Tokyo** first:
 
 - Region: `ap-northeast-1`
 - Service size: `medium`
 - Scale: `1`
 - Expected cost: about `$40/month`
 
-Lightsail Containers are enough for the API/dashboard and live paper recon loop. The current local
-container has been running around one vCPU burst and well under 512 MB RAM, so medium gives us a
-reasonable buffer without jumping straight to EC2.
+Lightsail Containers are enough for the API/dashboard and live paper recon loop. A Lightsail VM is
+the better first research box when durable recon files, `docker compose`, and easy replay access
+matter. The current local container has been running around one vCPU burst and well under 512 MB RAM,
+so medium gives us a reasonable buffer without jumping straight to EC2.
 
 Important caveat: Lightsail Containers do not behave like a normal Docker host with a durable mounted
 volume. Treat local `/app/data` inside the service as operational scratch. For serious multi-day
@@ -171,6 +172,15 @@ cd my-trader
 cp deployments/aws/lightsail.env.example deployments/aws/lightsail.env
 docker compose -f docker-compose.aws.yml up --build -d
 ```
+
+The AWS examples default to the current ETHUSDT microstructure-router research profile:
+
+- `SYMBOL=ETHUSDT`
+- higher-timeframe context on `5m,1h,4h,1d,1w`
+- BTC cross-market confirmation enabled
+- candidate outcome logging enabled
+- MFE trailing paper exits enabled for `htf_aligned_fast` and `eth_counter_htf_bounce`
+- maker reversion kept shadow-only
 
 Run a one-off recon:
 
