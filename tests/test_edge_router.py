@@ -111,6 +111,15 @@ def test_taker_impulse_blocks_unstable_or_lagged_book():
     assert "impulse_book_lagged" in impulse_short["blockers"]
 
 
+def test_router_base_blocks_high_exchange_event_lag():
+    router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0, MAX_EXCHANGE_EVENT_LAG_MS=1_000))
+
+    result = router.evaluate(_market(avg_event_lag_30s_ms=5_000))
+    impulse_short = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "taker_impulse_short")
+
+    assert "exchange_event_lagged" in impulse_short["blockers"]
+
+
 def test_router_can_report_paper_candidate_mode_without_executing():
     router = EdgeRouter(Settings(EDGE_ROUTER_PAPER_ENABLED=True, EDGE_ROUTER_MIN_EV_BPS=0.0))
 

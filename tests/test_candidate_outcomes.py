@@ -93,3 +93,16 @@ def test_candidate_outcome_tracker_dedupes_by_strategy_side_and_status():
 
     assert len(first) == 2
     assert second == []
+
+
+def test_candidate_outcome_tracker_does_not_open_on_lagged_exchange_events():
+    tracker = CandidateOutcomeTracker(Settings(MAX_EXCHANGE_EVENT_LAG_MS=1_000))
+    start = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+
+    opened = tracker.open_from_decision(
+        _decision(),
+        _market(100.0, start, avg_event_lag_30s_ms=5_000),
+        opened_at=start,
+    )
+
+    assert opened == []

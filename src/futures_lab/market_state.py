@@ -101,14 +101,18 @@ class MarketStateBook:
         if connected and self.started_at is None:
             self.started_at = now_utc()
 
-    def ingest(self, payload: dict, received_at: datetime | None = None) -> None:
+    def ingest(self, payload: dict, received_at: datetime | None = None) -> bool:
         received_at = received_at or now_utc()
-        self.last_received_at = received_at
         event_ms = payload.get("E") or payload.get("T")
         if event_ms is not None:
-            self.last_event_at = datetime.fromtimestamp(int(event_ms) / 1000, tz=timezone.utc)
-            lag_ms = max(0.0, (received_at - self.last_event_at).total_seconds() * 1000)
+            event_at = datetime.fromtimestamp(int(event_ms) / 1000, tz=timezone.utc)
+            lag_ms = max(0.0, (received_at - event_at).total_seconds() * 1000)
             self.latencies.append(LatencyPoint(ts=received_at, lag_ms=lag_ms))
+            if lag_ms > self.settings.max_exchange_event_lag_ms:
+                self._trim(received_at)
+                return False
+            self.last_event_at = event_at
+        self.last_received_at = received_at
 
         event_type = self._event_type(payload)
         self.last_stream_event_type = event_type
@@ -163,6 +167,7 @@ class MarketStateBook:
                 )
 
         self._trim(received_at)
+        return True
 
     def set_open_interest(self, value: float, updated_at: datetime | None = None) -> None:
         updated_at = updated_at or now_utc()
@@ -648,6 +653,9 @@ class MarketStateBook:
 
     def _classify_regime(self, state: MarketState) -> Regime:
         if state.data_age_seconds is None or state.data_age_seconds > self.settings.stale_after_seconds:
+            return Regime.stale
+        lag_ms = state.avg_event_lag_30s_ms if state.avg_event_lag_30s_ms is not None else state.exchange_event_lag_ms
+        if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
             return Regime.stale
         if state.observed_seconds < self.settings.min_warmup_seconds:
             return Regime.warming_up

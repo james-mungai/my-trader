@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import signal
 from datetime import datetime, timedelta, timezone
 
 from futures_lab.audit import AuditLog
@@ -31,11 +32,22 @@ def _deadline_remaining_seconds(deadline: datetime, *, current: datetime | None 
 async def watch(seconds: int, quiet: bool = False) -> None:
     settings = Settings()
     runtime = TradingRuntime.create(settings)
+    stop_requested = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_requested.set)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop_requested.set))
     runtime.start()
     try:
         deadline = _record_deadline(seconds)
-        while (remaining := _deadline_remaining_seconds(deadline)) > 0:
-            await asyncio.sleep(min(1, remaining))
+        while (remaining := _deadline_remaining_seconds(deadline)) > 0 and not stop_requested.is_set():
+            try:
+                await asyncio.wait_for(stop_requested.wait(), timeout=min(1, remaining))
+                break
+            except TimeoutError:
+                pass
             market, decision, risk = runtime.decide_once()
             if not quiet:
                 print(
@@ -52,7 +64,7 @@ async def watch(seconds: int, quiet: bool = False) -> None:
                 )
     finally:
         try:
-            await asyncio.wait_for(runtime.stop(), timeout=10)
+            await asyncio.wait_for(asyncio.shield(runtime.stop()), timeout=settings.shutdown_timeout_seconds)
         except TimeoutError:
             print("Timed out while stopping runtime; event loop shutdown will cancel remaining tasks.")
 

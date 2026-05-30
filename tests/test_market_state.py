@@ -66,6 +66,32 @@ def test_market_state_rolls_open_interest_change():
     assert snapshot.open_interest_change_5m_pct == 0.025
 
 
+def test_market_state_drops_exchange_events_that_arrive_too_late():
+    settings = Settings(MAX_EXCHANGE_EVENT_LAG_MS=1_000, MIN_WARMUP_SECONDS=1, STALE_AFTER_SECONDS=999)
+    book = MarketStateBook(settings)
+    book.set_connected(True)
+    received_at = datetime(2026, 5, 30, 9, 0, 10, tzinfo=timezone.utc)
+    stale_event_ms = int((received_at - timedelta(seconds=10)).timestamp() * 1000)
+
+    accepted = book.ingest(
+        {
+            "e": "aggTrade",
+            "E": stale_event_ms,
+            "p": "100.00",
+            "q": "1",
+            "m": False,
+        },
+        received_at=received_at,
+    )
+    snapshot = book.snapshot(current=received_at)
+
+    assert accepted is False
+    assert snapshot.last_trade_price is None
+    assert snapshot.last_received_at is None
+    assert snapshot.exchange_event_lag_ms == 10_000
+    assert snapshot.regime.value == "stale"
+
+
 def test_market_state_rolls_microstructure_features():
     settings = Settings(MIN_WARMUP_SECONDS=1, STALE_AFTER_SECONDS=999, DEPTH_LEVELS=5)
     book = MarketStateBook(settings)

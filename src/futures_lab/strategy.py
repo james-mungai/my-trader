@@ -25,7 +25,10 @@ class HitAndRunStrategy:
     edge_router: EdgeRouter = field(init=False)
 
     def __post_init__(self) -> None:
-        self.sequence = MarketStateMachine(history_size=self.settings.markov_state_history)
+        self.sequence = MarketStateMachine(
+            history_size=self.settings.markov_state_history,
+            max_exchange_event_lag_ms=self.settings.max_exchange_event_lag_ms,
+        )
         self.recent_stateful_signals = {}
         self.edge_router = EdgeRouter(self.settings)
 
@@ -741,6 +744,9 @@ class HitAndRunStrategy:
             blockers.append("missing mid price")
         if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:
             blockers.append(f"spread not tradable: {market.spread_bps}")
+        lag_ms = market.avg_event_lag_30s_ms if market.avg_event_lag_30s_ms is not None else market.exchange_event_lag_ms
+        if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
+            blockers.append(f"exchange event lag too high: {lag_ms:.0f}ms")
         if market.range_position_180s is None:
             blockers.append("missing range position")
         if market.taker_buy_ratio_10s is None:

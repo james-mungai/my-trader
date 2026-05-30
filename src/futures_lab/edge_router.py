@@ -340,6 +340,9 @@ class EdgeRouter:
         blockers = []
         if market.data_age_seconds is None or market.data_age_seconds > self.settings.stale_after_seconds:
             blockers.append("stale_data")
+        lag_ms = market.avg_event_lag_30s_ms if market.avg_event_lag_30s_ms is not None else market.exchange_event_lag_ms
+        if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
+            blockers.append("exchange_event_lagged")
         if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:
             blockers.append("spread_too_wide")
         if market.mid_price is None:

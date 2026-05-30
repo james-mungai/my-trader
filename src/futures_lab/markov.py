@@ -102,6 +102,7 @@ class MarkovTransitionLogger:
 @dataclass
 class MarketStateMachine:
     history_size: int = 8
+    max_exchange_event_lag_ms: float = 2_000.0
     logger: MarkovTransitionLogger = field(default_factory=MarkovTransitionLogger)
 
     def __post_init__(self) -> None:
@@ -178,6 +179,9 @@ class MarketStateMachine:
             blockers.append("stream disconnected")
         if market.regime in {Regime.stale, Regime.warming_up, Regime.unknown}:
             blockers.append(f"regime={market.regime.value}")
+        lag_ms = market.avg_event_lag_30s_ms if market.avg_event_lag_30s_ms is not None else market.exchange_event_lag_ms
+        if lag_ms is not None and lag_ms > self.max_exchange_event_lag_ms:
+            blockers.append(f"exchange event lag={lag_ms:.0f}ms")
         if market.mid_price is None:
             blockers.append("missing mid price")
         if market.range_position_180s is None:

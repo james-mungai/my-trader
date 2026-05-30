@@ -179,6 +179,7 @@ The AWS examples default to the current ETHUSDT microstructure-router research p
 - higher-timeframe context on `5m,1h,4h,1d,1w`
 - BTC cross-market confirmation enabled
 - candidate outcome logging enabled
+- stale exchange events blocked at `MAX_EXCHANGE_EVENT_LAG_MS=2000`
 - MFE trailing paper exits enabled for `htf_aligned_fast` and `eth_counter_htf_bounce`
 - maker reversion kept shadow-only
 

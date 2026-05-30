@@ -31,6 +31,8 @@ class BinanceStreamRecorder:
         self._task: asyncio.Task | None = None
         self._stop: asyncio.Event | None = None
         self._last_recorded_at: dict[str, datetime] = {}
+        self._last_stale_event_audit_at: dict[str, datetime] = {}
+        self._stream_connected_at: dict[str, datetime] = {}
         self._current_buckets: dict[str, str] = {}
         self._anchor_symbol = self.settings.cross_market_anchor_symbol.upper()
         self._cross_market_state = self._build_cross_market_state()
@@ -95,6 +97,9 @@ class BinanceStreamRecorder:
             try:
                 async with websockets.connect(url, ping_interval=150, ping_timeout=30) as ws:
                     self.state.set_connected(True)
+                    connected_at = datetime.now(timezone.utc)
+                    self._stream_connected_at[url] = connected_at
+                    self.audit.write("stream_connected", {"url": url})
                     async for raw in ws:
                         if self._stop.is_set():
                             break
@@ -107,8 +112,23 @@ class BinanceStreamRecorder:
                 raise
             except Exception as exc:
                 self.state.set_connected(False)
+                disconnected_at = datetime.now(timezone.utc)
+                connected_at = self._stream_connected_at.pop(url, None)
+                session_seconds = (
+                    (disconnected_at - connected_at).total_seconds()
+                    if connected_at is not None
+                    else None
+                )
                 logger.warning("Binance stream error: %s", exc)
-                self.audit.write("stream_error", {"url": url, "error": str(exc)})
+                self.audit.write(
+                    "stream_error",
+                    {
+                        "url": url,
+                        "error": str(exc),
+                        "session_seconds": session_seconds,
+                        "reconnect_sleep_seconds": 2,
+                    },
+                )
                 await asyncio.sleep(2)
 
     def _record_raw(self, envelope: dict[str, Any]) -> None:
@@ -182,11 +202,38 @@ class BinanceStreamRecorder:
     def _ingest_payload(self, envelope: dict[str, Any], payload: dict[str, Any]) -> None:
         symbol = self._payload_symbol(envelope, payload)
         if self._cross_market_state is not None and symbol == self._anchor_symbol:
-            self._cross_market_state.ingest(payload)
+            accepted = self._cross_market_state.ingest(payload)
+            if not accepted:
+                self._audit_stale_event(symbol or self._anchor_symbol, payload)
+                return
             self._refresh_cross_market_context()
             return
-        self.state.ingest(payload)
+        accepted = self.state.ingest(payload)
+        if not accepted:
+            self._audit_stale_event(symbol or self.settings.symbol.upper(), payload)
+            return
         self._refresh_cross_market_context()
+
+    def _audit_stale_event(self, symbol: str, payload: dict[str, Any]) -> None:
+        event_ms = payload.get("E") or payload.get("T")
+        if event_ms is None:
+            return
+        now = datetime.now(timezone.utc)
+        key = f"{symbol}:{self._raw_event_name({}, payload)}"
+        last = self._last_stale_event_audit_at.get(key)
+        if last is not None and (now - last).total_seconds() < 60:
+            return
+        lag_ms = max(0.0, (now - datetime.fromtimestamp(int(event_ms) / 1000, tz=timezone.utc)).total_seconds() * 1000)
+        self._last_stale_event_audit_at[key] = now
+        self.audit.write(
+            "stream_stale_event_dropped",
+            {
+                "symbol": symbol,
+                "event": self._raw_event_name({}, payload),
+                "lag_ms": lag_ms,
+                "max_exchange_event_lag_ms": self.settings.max_exchange_event_lag_ms,
+            },
+        )
 
     def _refresh_cross_market_context(self) -> None:
         if self._cross_market_state is None:

@@ -140,6 +140,9 @@ def _context_stale(settings: Settings, market: MarketState) -> bool:
     age = market.cross_market_context_age_seconds
     if age is None:
         return True
+    lag_ms = (market.cross_market_context.get("anchor") or {}).get("exchange_event_lag_ms")
+    if lag_ms is not None and float(lag_ms) > settings.max_exchange_event_lag_ms:
+        return True
     return age > max(1.0, settings.cross_market_max_context_age_seconds)
 
 
