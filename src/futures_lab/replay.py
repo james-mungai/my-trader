@@ -268,16 +268,19 @@ def replay_files(
     hostile: bool | None = None,
 ) -> ReplaySummary:
     path_list = [Path(path) for path in paths]
-    state_book = MarketStateBook(settings)
+    hostile_enabled = settings.hostile_replay_enabled if hostile is None else hostile
+    book_settings = settings
+    if hostile_enabled:
+        book_settings = settings.model_copy(update={"max_exchange_event_lag_ms": 86_400_000})
+    state_book = MarketStateBook(book_settings)
     state_book.set_connected(True)
     anchor_symbol = settings.cross_market_anchor_symbol.upper()
     cross_market_book = None
     if settings.cross_market_enabled and anchor_symbol != settings.symbol.upper():
-        cross_market_book = MarketStateBook(settings.model_copy(update={"symbol": anchor_symbol}))
+        cross_market_book = MarketStateBook(book_settings.model_copy(update={"symbol": anchor_symbol}))
         cross_market_book.set_connected(True)
     strategy = HitAndRunStrategy(settings)
     risk = RiskEngine(settings)
-    hostile_enabled = settings.hostile_replay_enabled if hostile is None else hostile
     paper = HostileReplayBroker(settings) if hostile_enabled else PaperBroker(settings)
     shadow = ShadowTradeTracker(settings)
     regime_outcomes = RegimeOutcomeTracker(settings)

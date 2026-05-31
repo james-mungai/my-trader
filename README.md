@@ -50,6 +50,26 @@ The code uses Binance's upgraded split WebSocket routes:
 - `wss://fstream.binance.com/public/stream?...`
 - `wss://fstream.binance.com/market/stream?...`
 
+To separate provider/network latency from strategy behavior, use the standalone latency probe:
+
+```bash
+futures-lab latency-probe --seconds 300 --profile current --symbol ETHUSDT
+futures-lab latency-probe --seconds 300 --profile hot-combined --symbol ETHUSDT
+futures-lab latency-probe --seconds 300 --profile hot-split --symbol ETHUSDT
+futures-lab latency-probe --list-profiles --symbol ETHUSDT
+```
+
+Profiles:
+
+- `current`: mirrors the recorder's public and market combined sockets.
+- `hot-combined`: probes only ETH book/depth plus ETH aggregate trades.
+- `hot-split`: probes ETH bookTicker, depth, and aggregate trades on separate connections.
+- `aggtrade`, `bookticker`, `depth`: isolate one stream family.
+
+The probe writes compact samples under `data/latency_probes/` and prints per-stream event-lag,
+receive-gap, connection, and error statistics. This is the quickest way to compare laptop, AWS, GCP,
+and trading VPS routing before running the full strategy.
+
 Private account/order updates are deliberately not connected yet. The next safe phase is Binance demo
 or testnet through NautilusTrader, then gated live execution only after paper data proves behavior.
 

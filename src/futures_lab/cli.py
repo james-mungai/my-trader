@@ -14,6 +14,7 @@ from futures_lab.data_ops import (
     summarize_exit_shadow,
     summarize_regime_outcomes,
 )
+from futures_lab.latency_probe import build_probe_streams, run_latency_probe
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.readiness import evaluate_readiness
 from futures_lab.runtime import TradingRuntime
@@ -166,6 +167,27 @@ def readiness_report(
     print(json.dumps(report.model_dump(), indent=2, default=str))
 
 
+async def latency_probe(
+    seconds: int,
+    profile: str,
+    symbol: str | None,
+    anchor_symbol: str | None,
+    depth_levels: int | None,
+    no_write_log: bool,
+) -> None:
+    settings = Settings()
+    summary = await run_latency_probe(
+        settings,
+        seconds=seconds,
+        profile=profile,
+        symbol=symbol,
+        anchor_symbol=anchor_symbol,
+        depth_levels=depth_levels,
+        write_log=not no_write_log,
+    )
+    print(json.dumps(summary, indent=2, default=str))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Futures Lab CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -204,6 +226,20 @@ def main() -> None:
     readiness_parser.add_argument("--include-depth", action="store_true")
     readiness_parser.add_argument("--book-ticker-min-interval-ms", type=int, default=100)
     readiness_parser.add_argument("--flatten-at-end", action="store_true")
+
+    latency_parser = sub.add_parser("latency-probe", help="Measure Binance WebSocket event lag without running strategy logic.")
+    latency_parser.add_argument("--seconds", type=int, default=300)
+    latency_parser.add_argument(
+        "--profile",
+        default="current",
+        choices=["current", "hot-combined", "hot-split", "aggtrade", "bookticker", "depth"],
+        help="Stream profile to probe. `current` mirrors the recorder's public/market combined sockets.",
+    )
+    latency_parser.add_argument("--symbol", default=None, help="Override SYMBOL for this probe, e.g. ETHUSDT.")
+    latency_parser.add_argument("--anchor-symbol", default=None, help="Override BTC cross-market anchor for current profile.")
+    latency_parser.add_argument("--depth-levels", type=int, default=None)
+    latency_parser.add_argument("--no-write-log", action="store_true", help="Only print summary JSON; do not write sample JSONL.")
+    latency_parser.add_argument("--list-profiles", action="store_true", help="Show stream URLs for every built-in profile and exit.")
 
     data_summary_parser = sub.add_parser("data-summary", help="Summarize recon data storage.")
     data_summary_parser.add_argument("--largest", type=int, default=20)
@@ -253,6 +289,36 @@ def main() -> None:
             include_depth=args.include_depth,
             book_ticker_min_interval_ms=args.book_ticker_min_interval_ms,
             flatten_at_end=args.flatten_at_end,
+        )
+    elif args.command == "latency-probe":
+        if args.list_profiles:
+            settings = Settings()
+            symbol = args.symbol or settings.symbol
+            anchor = args.anchor_symbol or settings.cross_market_anchor_symbol
+            depth_levels = args.depth_levels if args.depth_levels is not None else settings.depth_levels
+            profiles = {}
+            for profile in ["current", "hot-combined", "hot-split", "aggtrade", "bookticker", "depth"]:
+                profiles[profile] = [
+                    {"name": spec.name, "url": spec.url, "streams": list(spec.streams)}
+                    for spec in build_probe_streams(
+                        profile=profile,
+                        symbol=symbol,
+                        anchor_symbol=anchor,
+                        depth_levels=depth_levels,
+                        include_liquidations=settings.consume_liquidation_stream,
+                    )
+                ]
+            print(json.dumps(profiles, indent=2))
+            return
+        asyncio.run(
+            latency_probe(
+                args.seconds,
+                args.profile,
+                args.symbol,
+                args.anchor_symbol,
+                args.depth_levels,
+                args.no_write_log,
+            )
         )
     elif args.command == "data-summary":
         print(json.dumps(summarize_data(Settings(), largest=args.largest).model_dump(), indent=2))
