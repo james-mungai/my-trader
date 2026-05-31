@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     symbol: str = Field(default="BTCUSDT", alias="SYMBOL")
     binance_env: str = Field(default="LIVE", alias="BINANCE_ENV")
+    binance_stream_profile: str = Field(default="current", alias="BINANCE_STREAM_PROFILE")
     record_raw_ws: bool = Field(default=True, alias="RECORD_RAW_WS")
     consume_depth_stream: bool = Field(default=True, alias="CONSUME_DEPTH_STREAM")
     record_depth_stream: bool = Field(default=False, alias="RECORD_DEPTH_STREAM")

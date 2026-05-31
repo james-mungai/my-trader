@@ -70,6 +70,14 @@ The probe writes compact samples under `data/latency_probes/` and prints per-str
 receive-gap, connection, and error statistics. This is the quickest way to compare laptop, AWS, GCP,
 and trading VPS routing before running the full strategy.
 
+The recorder can also use the same hot-stream routing by setting `BINANCE_STREAM_PROFILE`:
+
+- `current`: existing two-socket public/context and market/context layout.
+- `hot-combined`: primary book/depth and primary trades on separate hot sockets, context on separate sockets.
+- `hot-split`: primary bookTicker, depth, and trades each on their own socket, context on separate sockets.
+
+Use `hot-split` for latency-sensitive AWS recon runs when the probe confirms it is the fastest route.
+
 Private account/order updates are deliberately not connected yet. The next safe phase is Binance demo
 or testnet through NautilusTrader, then gated live execution only after paper data proves behavior.
 

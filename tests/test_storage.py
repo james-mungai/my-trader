@@ -59,3 +59,53 @@ def test_compresses_previous_rotation_bucket(tmp_path):
     assert gz_path.exists()
     with gzip.open(gz_path, "rt", encoding="utf-8") as handle:
         assert json.loads(handle.readline()) == {"ok": True}
+
+
+def test_current_stream_profile_keeps_existing_combined_layout(tmp_path):
+    settings = Settings(
+        DATA_DIR=str(tmp_path),
+        SYMBOL="ETHUSDT",
+        CROSS_MARKET_ENABLED=True,
+        CROSS_MARKET_ANCHOR_SYMBOL="BTCUSDT",
+        BINANCE_STREAM_PROFILE="current",
+    )
+    recorder = BinanceStreamRecorder(settings, MarketStateBook(settings), AuditLog(settings))
+
+    specs = recorder._stream_specs()
+
+    assert [spec.name for spec in specs] == ["public-current", "market-current"]
+    assert specs[0].streams == ("ethusdt@bookTicker", "ethusdt@depth5@100ms", "btcusdt@bookTicker")
+    assert specs[1].streams == (
+        "ethusdt@aggTrade",
+        "ethusdt@markPrice@1s",
+        "ethusdt@kline_1m",
+        "ethusdt@forceOrder",
+        "btcusdt@aggTrade",
+        "btcusdt@markPrice@1s",
+    )
+
+
+def test_hot_split_stream_profile_isolates_primary_hot_feeds(tmp_path):
+    settings = Settings(
+        DATA_DIR=str(tmp_path),
+        SYMBOL="ETHUSDT",
+        CROSS_MARKET_ENABLED=True,
+        CROSS_MARKET_ANCHOR_SYMBOL="BTCUSDT",
+        BINANCE_STREAM_PROFILE="hot-split",
+    )
+    recorder = BinanceStreamRecorder(settings, MarketStateBook(settings), AuditLog(settings))
+
+    specs = recorder._stream_specs()
+
+    assert [spec.name for spec in specs] == ["bookticker", "depth", "aggtrade", "public-context", "market-context"]
+    assert specs[0].streams == ("ethusdt@bookTicker",)
+    assert specs[1].streams == ("ethusdt@depth5@100ms",)
+    assert specs[2].streams == ("ethusdt@aggTrade",)
+    assert specs[3].streams == ("btcusdt@bookTicker",)
+    assert specs[4].streams == (
+        "ethusdt@markPrice@1s",
+        "ethusdt@kline_1m",
+        "ethusdt@forceOrder",
+        "btcusdt@aggTrade",
+        "btcusdt@markPrice@1s",
+    )

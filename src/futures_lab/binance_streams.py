@@ -22,6 +22,13 @@ MARKET_WS_BASE = "wss://fstream.binance.com/market/stream?streams="
 
 
 @dataclass
+class StreamConnectionSpec:
+    name: str
+    url: str
+    streams: tuple[str, ...]
+
+
+@dataclass
 class BinanceStreamRecorder:
     settings: Settings
     state: MarketStateBook
@@ -47,7 +54,13 @@ class BinanceStreamRecorder:
             return
         self._stop = asyncio.Event()
         self._task = asyncio.create_task(self._run(), name="binance-stream-recorder")
-        self.audit.write("stream_start", {"symbol": self.settings.symbol.upper()})
+        self.audit.write(
+            "stream_start",
+            {
+                "symbol": self.settings.symbol.upper(),
+                "profile": self._stream_profile(),
+            },
+        )
 
     async def stop(self) -> None:
         if self._stop is not None:
@@ -62,36 +75,61 @@ class BinanceStreamRecorder:
         self.audit.write("stream_stop", {"symbol": self.settings.symbol.upper()})
 
     async def _run(self) -> None:
+        await asyncio.gather(*[self._consume(spec) for spec in self._stream_specs()])
+
+    def _stream_specs(self) -> list[StreamConnectionSpec]:
         symbol = self.settings.symbol_lower
         anchor = self._anchor_symbol.lower()
-        public_stream_names = [f"{symbol}@bookTicker"]
+        depth_stream = None
         if self.settings.consume_depth_stream or self.settings.record_depth_stream:
             levels = self._supported_depth_levels(self.settings.depth_levels)
-            public_stream_names.append(f"{symbol}@depth{levels}@100ms")
-        if self._cross_market_state is not None:
-            public_stream_names.append(f"{anchor}@bookTicker")
-        public_streams = "/".join(public_stream_names)
-        market_stream_names = [
-            f"{symbol}@aggTrade",
+            depth_stream = f"{symbol}@depth{levels}@100ms"
+
+        primary_public = (f"{symbol}@bookTicker", *((depth_stream,) if depth_stream else ()))
+        primary_market = (f"{symbol}@aggTrade",)
+        public_context = (f"{anchor}@bookTicker",) if self._cross_market_state is not None else ()
+        market_context = (
             f"{symbol}@markPrice@1s",
             f"{symbol}@kline_1m",
-        ]
-        if self.settings.consume_liquidation_stream:
-            market_stream_names.append(f"{symbol}@forceOrder")
-        if self._cross_market_state is not None:
-            market_stream_names.extend(
-                [
-                    f"{anchor}@aggTrade",
-                    f"{anchor}@markPrice@1s",
-                ]
-            )
-        market_streams = "/".join(market_stream_names)
-        await asyncio.gather(
-            self._consume(PUBLIC_WS_BASE + public_streams),
-            self._consume(MARKET_WS_BASE + market_streams),
+            *((f"{symbol}@forceOrder",) if self.settings.consume_liquidation_stream else ()),
+            *((f"{anchor}@aggTrade", f"{anchor}@markPrice@1s") if self._cross_market_state is not None else ()),
         )
 
-    async def _consume(self, url: str) -> None:
+        profile = self._stream_profile()
+        if profile == "current":
+            specs = [
+                self._combined_spec("public-current", PUBLIC_WS_BASE, (*primary_public, *public_context)),
+                self._combined_spec("market-current", MARKET_WS_BASE, (*primary_market, *market_context)),
+            ]
+        elif profile == "hot-combined":
+            specs = [
+                self._combined_spec("public-hot", PUBLIC_WS_BASE, primary_public),
+                self._combined_spec("market-hot", MARKET_WS_BASE, primary_market),
+                self._combined_spec("public-context", PUBLIC_WS_BASE, public_context),
+                self._combined_spec("market-context", MARKET_WS_BASE, market_context),
+            ]
+        elif profile == "hot-split":
+            specs = [
+                self._combined_spec("bookticker", PUBLIC_WS_BASE, (f"{symbol}@bookTicker",)),
+                self._combined_spec("depth", PUBLIC_WS_BASE, (depth_stream,) if depth_stream else ()),
+                self._combined_spec("aggtrade", MARKET_WS_BASE, primary_market),
+                self._combined_spec("public-context", PUBLIC_WS_BASE, public_context),
+                self._combined_spec("market-context", MARKET_WS_BASE, market_context),
+            ]
+        else:
+            supported = "current, hot-combined, hot-split"
+            raise ValueError(f"Unsupported BINANCE_STREAM_PROFILE {self.settings.binance_stream_profile!r}. Supported: {supported}.")
+
+        return [spec for spec in specs if spec.streams]
+
+    def _stream_profile(self) -> str:
+        return self.settings.binance_stream_profile.strip().lower().replace("_", "-")
+
+    def _combined_spec(self, name: str, base_url: str, streams: tuple[str, ...]) -> StreamConnectionSpec:
+        return StreamConnectionSpec(name=name, url=base_url + "/".join(streams), streams=streams)
+
+    async def _consume(self, spec: StreamConnectionSpec) -> None:
+        url = spec.url
         assert self._stop is not None
         while not self._stop.is_set():
             try:
@@ -99,7 +137,15 @@ class BinanceStreamRecorder:
                     self.state.set_connected(True)
                     connected_at = datetime.now(timezone.utc)
                     self._stream_connected_at[url] = connected_at
-                    self.audit.write("stream_connected", {"url": url})
+                    self.audit.write(
+                        "stream_connected",
+                        {
+                            "name": spec.name,
+                            "url": url,
+                            "streams": list(spec.streams),
+                            "profile": self._stream_profile(),
+                        },
+                    )
                     async for raw in ws:
                         if self._stop.is_set():
                             break
@@ -123,7 +169,10 @@ class BinanceStreamRecorder:
                 self.audit.write(
                     "stream_error",
                     {
+                        "name": spec.name,
                         "url": url,
+                        "streams": list(spec.streams),
+                        "profile": self._stream_profile(),
                         "error": str(exc),
                         "session_seconds": session_seconds,
                         "reconnect_sleep_seconds": 2,
