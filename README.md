@@ -77,6 +77,9 @@ The recorder can also use the same hot-stream routing by setting `BINANCE_STREAM
 - `hot-split`: primary bookTicker, depth, and trades each on their own socket, context on separate sockets.
 
 Use `hot-split` for latency-sensitive AWS recon runs when the probe confirms it is the fastest route.
+`CONSUME_BOOK_TICKER_MIN_INTERVAL_MS` throttles only state ingestion for high-volume bookTicker updates;
+depth/trade streams remain unthrottled, and raw bookTicker storage keeps its separate
+`RECORD_BOOK_TICKER_MIN_INTERVAL_MS` setting.
 
 Private account/order updates are deliberately not connected yet. The next safe phase is Binance demo
 or testnet through NautilusTrader, then gated live execution only after paper data proves behavior.

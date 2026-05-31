@@ -1,5 +1,6 @@
 import gzip
 import json
+from datetime import datetime, timedelta, timezone
 
 from futures_lab.audit import AuditLog
 from futures_lab.binance_streams import BinanceStreamRecorder
@@ -109,3 +110,29 @@ def test_hot_split_stream_profile_isolates_primary_hot_feeds(tmp_path):
         "btcusdt@aggTrade",
         "btcusdt@markPrice@1s",
     )
+
+
+def test_book_ticker_ingestion_can_be_throttled(tmp_path):
+    settings = Settings(
+        DATA_DIR=str(tmp_path),
+        SYMBOL="ETHUSDT",
+        CONSUME_BOOK_TICKER_MIN_INTERVAL_MS=50,
+    )
+    recorder = BinanceStreamRecorder(settings, MarketStateBook(settings), AuditLog(settings))
+    first = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
+    envelope = {
+        "stream": "ethusdt@bookTicker",
+        "data": {
+            "e": "bookTicker",
+            "E": int(first.timestamp() * 1000),
+            "s": "ETHUSDT",
+            "b": "100.00",
+            "a": "100.01",
+            "B": "1",
+            "A": "1",
+        },
+    }
+
+    assert recorder._should_ingest_payload(envelope, envelope["data"], first)
+    assert not recorder._should_ingest_payload(envelope, envelope["data"], first + timedelta(milliseconds=10))
+    assert recorder._should_ingest_payload(envelope, envelope["data"], first + timedelta(milliseconds=50))

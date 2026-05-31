@@ -38,6 +38,7 @@ class BinanceStreamRecorder:
         self._task: asyncio.Task | None = None
         self._stop: asyncio.Event | None = None
         self._last_recorded_at: dict[str, datetime] = {}
+        self._last_ingested_at: dict[str, datetime] = {}
         self._last_stale_event_audit_at: dict[str, datetime] = {}
         self._stream_connected_at: dict[str, datetime] = {}
         self._current_buckets: dict[str, str] = {}
@@ -149,11 +150,13 @@ class BinanceStreamRecorder:
                     async for raw in ws:
                         if self._stop.is_set():
                             break
+                        received_at = datetime.now(timezone.utc)
                         envelope = json.loads(raw)
                         payload = envelope.get("data", envelope)
                         if self.settings.record_raw_ws:
-                            self._record_raw(envelope)
-                        self._ingest_payload(envelope, payload)
+                            self._record_raw(envelope, received_at=received_at)
+                        if self._should_ingest_payload(envelope, payload, received_at):
+                            self._ingest_payload(envelope, payload, received_at=received_at)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -180,11 +183,11 @@ class BinanceStreamRecorder:
                 )
                 await asyncio.sleep(2)
 
-    def _record_raw(self, envelope: dict[str, Any]) -> None:
+    def _record_raw(self, envelope: dict[str, Any], *, received_at: datetime | None = None) -> None:
         payload = envelope.get("data", envelope)
         event = self._raw_event_name(envelope, payload)
         symbol = self._payload_symbol(envelope, payload) or self.settings.symbol.upper()
-        now = datetime.now(timezone.utc)
+        now = received_at or datetime.now(timezone.utc)
         if not self._should_record_event(symbol, event, now):
             return
 
@@ -248,16 +251,32 @@ class BinanceStreamRecorder:
             return "partialDepth"
         return "unknown"
 
-    def _ingest_payload(self, envelope: dict[str, Any], payload: dict[str, Any]) -> None:
+    def _should_ingest_payload(self, envelope: dict[str, Any], payload: dict[str, Any], received_at: datetime) -> bool:
+        event = self._raw_event_name(envelope, payload)
+        if event != "bookTicker":
+            return True
+        interval = max(0, self.settings.consume_book_ticker_min_interval_ms)
+        if interval <= 0:
+            return True
+        symbol = self._payload_symbol(envelope, payload) or self.settings.symbol.upper()
+        key = f"{symbol}:{event}"
+        last = self._last_ingested_at.get(key)
+        if last is not None and (received_at - last).total_seconds() * 1000 < interval:
+            return False
+        self._last_ingested_at[key] = received_at
+        return True
+
+    def _ingest_payload(self, envelope: dict[str, Any], payload: dict[str, Any], *, received_at: datetime | None = None) -> None:
+        received_at = received_at or datetime.now(timezone.utc)
         symbol = self._payload_symbol(envelope, payload)
         if self._cross_market_state is not None and symbol == self._anchor_symbol:
-            accepted = self._cross_market_state.ingest(payload)
+            accepted = self._cross_market_state.ingest(payload, received_at=received_at)
             if not accepted:
                 self._audit_stale_event(symbol or self._anchor_symbol, payload)
                 return
             self._refresh_cross_market_context()
             return
-        accepted = self.state.ingest(payload)
+        accepted = self.state.ingest(payload, received_at=received_at)
         if not accepted:
             self._audit_stale_event(symbol or self.settings.symbol.upper(), payload)
             return
