@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     record_depth_stream: bool = Field(default=False, alias="RECORD_DEPTH_STREAM")
     depth_levels: int = Field(default=5, alias="DEPTH_LEVELS")
     consume_liquidation_stream: bool = Field(default=True, alias="CONSUME_LIQUIDATION_STREAM")
-    consume_book_ticker_min_interval_ms: int = Field(default=50, alias="CONSUME_BOOK_TICKER_MIN_INTERVAL_MS")
+    consume_book_ticker_min_interval_ms: int = Field(default=250, alias="CONSUME_BOOK_TICKER_MIN_INTERVAL_MS")
     record_book_ticker_min_interval_ms: int = Field(default=250, alias="RECORD_BOOK_TICKER_MIN_INTERVAL_MS")
     raw_rotation_minutes: int = Field(default=60, alias="RAW_ROTATION_MINUTES")
     compress_rotated_raw: bool = Field(default=True, alias="COMPRESS_ROTATED_RAW")
