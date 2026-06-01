@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     consume_depth_stream: bool = Field(default=True, alias="CONSUME_DEPTH_STREAM")
     record_depth_stream: bool = Field(default=False, alias="RECORD_DEPTH_STREAM")
     depth_levels: int = Field(default=5, alias="DEPTH_LEVELS")
+    consume_depth_top_book_min_interval_ms: int = Field(default=250, alias="CONSUME_DEPTH_TOP_BOOK_MIN_INTERVAL_MS")
     consume_liquidation_stream: bool = Field(default=True, alias="CONSUME_LIQUIDATION_STREAM")
     consume_book_ticker_min_interval_ms: int = Field(default=250, alias="CONSUME_BOOK_TICKER_MIN_INTERVAL_MS")
     record_book_ticker_min_interval_ms: int = Field(default=250, alias="RECORD_BOOK_TICKER_MIN_INTERVAL_MS")

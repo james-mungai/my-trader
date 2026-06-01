@@ -95,6 +95,7 @@ class MarketStateBook:
     depth_bids: dict[float, float] = field(default_factory=dict)
     depth_asks: dict[float, float] = field(default_factory=dict)
     last_stream_event_type: str | None = None
+    last_depth_top_book_sample_at: datetime | None = None
 
     def set_connected(self, connected: bool) -> None:
         self.connected = connected
@@ -150,8 +151,9 @@ class MarketStateBook:
             if self.mid_price is None:
                 self.prices.append(PricePoint(ts=received_at, price=self.mark_price))
         elif event_type in {"depthUpdate", "partialDepth"}:
-            self._ingest_depth(payload, received_at)
-            self._append_depth_point(received_at)
+            sampled = self._ingest_depth(payload, received_at)
+            if sampled:
+                self._append_depth_point(received_at)
         elif event_type == "forceOrder":
             order = payload.get("o", {})
             price = float(order.get("p") or order.get("ap") or 0.0)
@@ -330,19 +332,18 @@ class MarketStateBook:
             return "partialDepth"
         return event_type
 
-    def _ingest_depth(self, payload: dict, received_at: datetime) -> None:
+    def _ingest_depth(self, payload: dict, received_at: datetime) -> bool:
         bids = payload.get("b") or payload.get("bids") or []
         asks = payload.get("a") or payload.get("asks") or []
         if payload.get("e") == "depthUpdate":
             self._apply_depth_delta(self.depth_bids, bids)
             self._apply_depth_delta(self.depth_asks, asks)
             self._trim_depth_books()
-            self._sync_top_of_book_from_depth(received_at)
-            return
+            return self._sync_top_of_book_from_depth(received_at)
         self.depth_bids = {float(price): float(qty) for price, qty in bids if float(qty) > 0}
         self.depth_asks = {float(price): float(qty) for price, qty in asks if float(qty) > 0}
         self._trim_depth_books()
-        self._sync_top_of_book_from_depth(received_at)
+        return self._sync_top_of_book_from_depth(received_at)
 
     def _apply_depth_delta(self, book: dict[float, float], levels: list) -> None:
         for price_raw, qty_raw in levels:
@@ -358,20 +359,35 @@ class MarketStateBook:
         self.depth_bids = dict(sorted(self.depth_bids.items(), reverse=True)[:levels])
         self.depth_asks = dict(sorted(self.depth_asks.items())[:levels])
 
-    def _sync_top_of_book_from_depth(self, ts: datetime) -> None:
+    def _sync_top_of_book_from_depth(self, ts: datetime) -> bool:
         if not self.depth_bids or not self.depth_asks:
-            return
+            return False
         bid, bid_qty = max(self.depth_bids.items())
         ask, ask_qty = min(self.depth_asks.items())
-        self._append_order_flow_imbalance(ts, bid, ask, bid_qty, ask_qty)
+        should_sample = self._should_sample_depth_top_book(ts)
+        if should_sample:
+            self._append_order_flow_imbalance(ts, bid, ask, bid_qty, ask_qty)
         self.best_bid = bid
         self.best_ask = ask
         self.best_bid_qty = bid_qty
         self.best_ask_qty = ask_qty
-        self._append_spread(ts)
-        mid = self.mid_price
-        if mid is not None:
-            self.prices.append(PricePoint(ts=ts, price=mid))
+        if should_sample:
+            self._append_spread(ts)
+            mid = self.mid_price
+            if mid is not None:
+                self.prices.append(PricePoint(ts=ts, price=mid))
+        return should_sample
+
+    def _should_sample_depth_top_book(self, ts: datetime) -> bool:
+        interval_ms = max(0, self.settings.consume_depth_top_book_min_interval_ms)
+        if interval_ms <= 0:
+            self.last_depth_top_book_sample_at = ts
+            return True
+        last = self.last_depth_top_book_sample_at
+        if last is not None and (ts - last).total_seconds() * 1000 < interval_ms:
+            return False
+        self.last_depth_top_book_sample_at = ts
+        return True
 
     def _append_order_flow_imbalance(
         self,

@@ -54,7 +54,12 @@ def test_market_state_rolls_depth_liquidation_and_latency_features():
 
 
 def test_depth_snapshot_updates_top_of_book_without_book_ticker():
-    settings = Settings(MIN_WARMUP_SECONDS=1, STALE_AFTER_SECONDS=999, DEPTH_LEVELS=5)
+    settings = Settings(
+        MIN_WARMUP_SECONDS=1,
+        STALE_AFTER_SECONDS=999,
+        DEPTH_LEVELS=5,
+        CONSUME_DEPTH_TOP_BOOK_MIN_INTERVAL_MS=0,
+    )
     book = MarketStateBook(settings)
     book.set_connected(True)
     start = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
