@@ -89,7 +89,11 @@ class BinanceStreamRecorder:
         book_ticker_stream = f"{symbol}@bookTicker" if self.settings.consume_book_ticker_stream else None
         primary_public = (*((book_ticker_stream,) if book_ticker_stream else ()), *((depth_stream,) if depth_stream else ()))
         primary_market = (f"{symbol}@aggTrade",)
-        public_context = (f"{anchor}@bookTicker",) if self._cross_market_state is not None else ()
+        public_context = (
+            (f"{anchor}@bookTicker",)
+            if self._cross_market_state is not None and self.settings.consume_book_ticker_stream
+            else ()
+        )
         market_context = (
             f"{symbol}@markPrice@1s",
             f"{symbol}@kline_1m",

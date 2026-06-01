@@ -125,9 +125,10 @@ def test_hot_split_stream_profile_can_omit_primary_book_ticker(tmp_path):
 
     specs = recorder._stream_specs()
 
-    assert [spec.name for spec in specs] == ["depth", "aggtrade", "public-context", "market-context"]
+    assert [spec.name for spec in specs] == ["depth", "aggtrade", "market-context"]
     assert specs[0].streams == ("ethusdt@depth5@100ms",)
     assert all("ethusdt@bookTicker" not in spec.streams for spec in specs)
+    assert all("btcusdt@bookTicker" not in spec.streams for spec in specs)
 
 
 def test_book_ticker_ingestion_can_be_throttled(tmp_path):

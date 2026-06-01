@@ -80,7 +80,7 @@ Use `hot-split` for latency-sensitive AWS recon runs when the probe confirms it 
 `CONSUME_BOOK_TICKER_MIN_INTERVAL_MS` throttles only state ingestion for high-volume bookTicker updates;
 depth/trade streams remain unthrottled, and raw bookTicker storage keeps its separate
 `RECORD_BOOK_TICKER_MIN_INTERVAL_MS` setting.
-Set `CONSUME_BOOK_TICKER_STREAM=false` to omit the primary bookTicker socket entirely; top-of-book
+Set `CONSUME_BOOK_TICKER_STREAM=false` to omit bookTicker sockets entirely; ETH top-of-book
 bid/ask, spread, mid, and book imbalance are then derived from `depth5@100ms`.
 
 Private account/order updates are deliberately not connected yet. The next safe phase is Binance demo
