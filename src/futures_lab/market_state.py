@@ -150,7 +150,7 @@ class MarketStateBook:
             if self.mid_price is None:
                 self.prices.append(PricePoint(ts=received_at, price=self.mark_price))
         elif event_type in {"depthUpdate", "partialDepth"}:
-            self._ingest_depth(payload)
+            self._ingest_depth(payload, received_at)
             self._append_depth_point(received_at)
         elif event_type == "forceOrder":
             order = payload.get("o", {})
@@ -330,17 +330,19 @@ class MarketStateBook:
             return "partialDepth"
         return event_type
 
-    def _ingest_depth(self, payload: dict) -> None:
+    def _ingest_depth(self, payload: dict, received_at: datetime) -> None:
         bids = payload.get("b") or payload.get("bids") or []
         asks = payload.get("a") or payload.get("asks") or []
         if payload.get("e") == "depthUpdate":
             self._apply_depth_delta(self.depth_bids, bids)
             self._apply_depth_delta(self.depth_asks, asks)
             self._trim_depth_books()
+            self._sync_top_of_book_from_depth(received_at)
             return
         self.depth_bids = {float(price): float(qty) for price, qty in bids if float(qty) > 0}
         self.depth_asks = {float(price): float(qty) for price, qty in asks if float(qty) > 0}
         self._trim_depth_books()
+        self._sync_top_of_book_from_depth(received_at)
 
     def _apply_depth_delta(self, book: dict[float, float], levels: list) -> None:
         for price_raw, qty_raw in levels:
@@ -355,6 +357,21 @@ class MarketStateBook:
         levels = max(1, self.settings.depth_levels)
         self.depth_bids = dict(sorted(self.depth_bids.items(), reverse=True)[:levels])
         self.depth_asks = dict(sorted(self.depth_asks.items())[:levels])
+
+    def _sync_top_of_book_from_depth(self, ts: datetime) -> None:
+        if not self.depth_bids or not self.depth_asks:
+            return
+        bid, bid_qty = max(self.depth_bids.items())
+        ask, ask_qty = min(self.depth_asks.items())
+        self._append_order_flow_imbalance(ts, bid, ask, bid_qty, ask_qty)
+        self.best_bid = bid
+        self.best_ask = ask
+        self.best_bid_qty = bid_qty
+        self.best_ask_qty = ask_qty
+        self._append_spread(ts)
+        mid = self.mid_price
+        if mid is not None:
+            self.prices.append(PricePoint(ts=ts, price=mid))
 
     def _append_order_flow_imbalance(
         self,

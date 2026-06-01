@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     binance_env: str = Field(default="LIVE", alias="BINANCE_ENV")
     binance_stream_profile: str = Field(default="current", alias="BINANCE_STREAM_PROFILE")
     record_raw_ws: bool = Field(default=True, alias="RECORD_RAW_WS")
+    consume_book_ticker_stream: bool = Field(default=True, alias="CONSUME_BOOK_TICKER_STREAM")
     consume_depth_stream: bool = Field(default=True, alias="CONSUME_DEPTH_STREAM")
     record_depth_stream: bool = Field(default=False, alias="RECORD_DEPTH_STREAM")
     depth_levels: int = Field(default=5, alias="DEPTH_LEVELS")

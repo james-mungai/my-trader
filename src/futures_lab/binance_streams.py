@@ -86,7 +86,8 @@ class BinanceStreamRecorder:
             levels = self._supported_depth_levels(self.settings.depth_levels)
             depth_stream = f"{symbol}@depth{levels}@100ms"
 
-        primary_public = (f"{symbol}@bookTicker", *((depth_stream,) if depth_stream else ()))
+        book_ticker_stream = f"{symbol}@bookTicker" if self.settings.consume_book_ticker_stream else None
+        primary_public = (*((book_ticker_stream,) if book_ticker_stream else ()), *((depth_stream,) if depth_stream else ()))
         primary_market = (f"{symbol}@aggTrade",)
         public_context = (f"{anchor}@bookTicker",) if self._cross_market_state is not None else ()
         market_context = (
@@ -111,7 +112,7 @@ class BinanceStreamRecorder:
             ]
         elif profile == "hot-split":
             specs = [
-                self._combined_spec("bookticker", PUBLIC_WS_BASE, (f"{symbol}@bookTicker",)),
+                self._combined_spec("bookticker", PUBLIC_WS_BASE, (book_ticker_stream,) if book_ticker_stream else ()),
                 self._combined_spec("depth", PUBLIC_WS_BASE, (depth_stream,) if depth_stream else ()),
                 self._combined_spec("aggtrade", MARKET_WS_BASE, primary_market),
                 self._combined_spec("public-context", PUBLIC_WS_BASE, public_context),

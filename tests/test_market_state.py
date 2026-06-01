@@ -53,6 +53,41 @@ def test_market_state_rolls_depth_liquidation_and_latency_features():
     assert snapshot.avg_event_lag_30s_ms == 25
 
 
+def test_depth_snapshot_updates_top_of_book_without_book_ticker():
+    settings = Settings(MIN_WARMUP_SECONDS=1, STALE_AFTER_SECONDS=999, DEPTH_LEVELS=5)
+    book = MarketStateBook(settings)
+    book.set_connected(True)
+    start = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+
+    book.ingest(
+        {
+            "lastUpdateId": 1,
+            "E": int(start.timestamp() * 1000),
+            "bids": [["100.00", "4"], ["99.99", "2"]],
+            "asks": [["100.02", "3"], ["100.03", "1"]],
+        },
+        received_at=start,
+    )
+    book.ingest(
+        {
+            "lastUpdateId": 2,
+            "E": int((start + timedelta(milliseconds=100)).timestamp() * 1000),
+            "bids": [["100.01", "5"], ["100.00", "2"]],
+            "asks": [["100.02", "2"], ["100.03", "1"]],
+        },
+        received_at=start + timedelta(milliseconds=100),
+    )
+
+    snapshot = book.snapshot(current=start + timedelta(milliseconds=100))
+
+    assert snapshot.best_bid == 100.01
+    assert snapshot.best_ask == 100.02
+    assert snapshot.mid_price == pytest.approx(100.015)
+    assert snapshot.spread_bps == pytest.approx(((100.02 - 100.01) / 100.015) * 10_000)
+    assert snapshot.book_imbalance_top == pytest.approx((5 - 2) / (5 + 2))
+    assert snapshot.order_flow_imbalance_1s is not None
+
+
 def test_market_state_rolls_open_interest_change():
     book = MarketStateBook(Settings())
     start = datetime(2026, 5, 13, 9, 0, tzinfo=timezone.utc)
