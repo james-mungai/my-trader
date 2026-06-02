@@ -155,3 +155,63 @@ def test_book_ticker_ingestion_can_be_throttled(tmp_path):
     assert recorder._should_ingest_payload(envelope, envelope["data"], first)
     assert not recorder._should_ingest_payload(envelope, envelope["data"], first + timedelta(milliseconds=10))
     assert recorder._should_ingest_payload(envelope, envelope["data"], first + timedelta(milliseconds=50))
+
+
+def test_partial_depth_stream_replaces_book_even_with_depth_update_event(tmp_path):
+    settings = Settings(
+        DATA_DIR=str(tmp_path),
+        SYMBOL="ETHUSDT",
+        CONSUME_DEPTH_TOP_BOOK_MIN_INTERVAL_MS=0,
+        MAX_EXCHANGE_EVENT_LAG_MS=10_000,
+    )
+    state = MarketStateBook(settings)
+    recorder = BinanceStreamRecorder(settings, state, AuditLog(settings))
+    first = datetime(2026, 6, 2, 9, 0, tzinfo=timezone.utc)
+
+    recorder._ingest_payload(
+        {
+            "stream": "ethusdt@depth5@100ms",
+            "data": {
+                "e": "depthUpdate",
+                "E": int(first.timestamp() * 1000),
+                "s": "ETHUSDT",
+                "b": [["100.00", "3"], ["99.99", "2"]],
+                "a": [["100.02", "4"], ["100.03", "2"]],
+            },
+        },
+        {
+            "e": "depthUpdate",
+            "E": int(first.timestamp() * 1000),
+            "s": "ETHUSDT",
+            "b": [["100.00", "3"], ["99.99", "2"]],
+            "a": [["100.02", "4"], ["100.03", "2"]],
+        },
+        received_at=first,
+    )
+    recorder._ingest_payload(
+        {
+            "stream": "ethusdt@depth5@100ms",
+            "data": {
+                "e": "depthUpdate",
+                "E": int((first + timedelta(milliseconds=100)).timestamp() * 1000),
+                "s": "ETHUSDT",
+                "b": [["99.98", "5"], ["99.97", "2"]],
+                "a": [["100.01", "6"], ["100.02", "2"]],
+            },
+        },
+        {
+            "e": "depthUpdate",
+            "E": int((first + timedelta(milliseconds=100)).timestamp() * 1000),
+            "s": "ETHUSDT",
+            "b": [["99.98", "5"], ["99.97", "2"]],
+            "a": [["100.01", "6"], ["100.02", "2"]],
+        },
+        received_at=first + timedelta(milliseconds=100),
+    )
+
+    snapshot = state.snapshot(first + timedelta(milliseconds=100))
+
+    assert snapshot.best_bid == 99.98
+    assert snapshot.best_ask == 100.01
+    assert snapshot.spread_bps is not None
+    assert snapshot.spread_bps > 0

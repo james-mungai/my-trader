@@ -2,6 +2,7 @@ import asyncio
 import gzip
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -248,10 +249,12 @@ class BinanceStreamRecorder:
         raw_path.unlink()
 
     def _raw_event_name(self, envelope: dict[str, Any], payload: dict[str, Any]) -> str:
+        stream = str(envelope.get("stream") or "")
+        if re.search(r"@depth\d+", stream):
+            return "partialDepth"
         event = payload.get("e")
         if event is not None:
             return str(event)
-        stream = str(envelope.get("stream") or "")
         if "@depth" in stream:
             return "partialDepth"
         return "unknown"
@@ -273,6 +276,10 @@ class BinanceStreamRecorder:
 
     def _ingest_payload(self, envelope: dict[str, Any], payload: dict[str, Any], *, received_at: datetime | None = None) -> None:
         received_at = received_at or datetime.now(timezone.utc)
+        event = self._raw_event_name(envelope, payload)
+        if event == "partialDepth" and payload.get("e") == "depthUpdate":
+            payload = dict(payload)
+            payload["e"] = "partialDepth"
         symbol = self._payload_symbol(envelope, payload)
         if self._cross_market_state is not None and symbol == self._anchor_symbol:
             accepted = self._cross_market_state.ingest(payload, received_at=received_at)
