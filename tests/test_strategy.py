@@ -970,7 +970,7 @@ def test_stateful_momentum_blocks_breakout_when_recent_range_cannot_support_targ
     assert confirmed.evidence["stateful_momentum_filter"]["min_required_range_180s_pct"] == 0.0012
 
 
-def test_stateful_momentum_adaptive_gate_allows_high_confidence_low_range_long():
+def test_stateful_momentum_adaptive_gate_keeps_low_range_long_shadow_only_by_default():
     strategy = HitAndRunStrategy(
         Settings(
             MIN_CONFIDENCE=0.72,
@@ -998,12 +998,55 @@ def test_stateful_momentum_adaptive_gate_allows_high_confidence_low_range_long()
     strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00034, "taker_buy_ratio_10s": 0.74}))
     confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00036, "taker_buy_ratio_10s": 0.76}))
 
+    assert confirmed.action == DecisionAction.wait
+    assert "adaptive low-range profile is shadow-only" in confirmed.reason
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert stateful_filter["target_feasible"] is False
+    assert stateful_filter["adaptive_entry_allowed"] is True
+    assert "adaptive_low_range_shadow_only" in stateful_filter["blockers"]
+    assert stateful_filter["adaptive_low_range_live_gate"]["enabled"] is False
+    assert stateful_filter["entry_follow_through_gate"]["trade_profile"] == "adaptive_low_range"
+    assert "shadow_trade" in stateful_filter
+
+
+def test_stateful_momentum_adaptive_gate_can_be_live_enabled_with_strict_follow_through():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.72,
+            STRATEGY_VARIANT="stateful_momentum",
+            STATEFUL_ADAPTIVE_MIN_SCORE=0.70,
+            STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE=0.85,
+            STATEFUL_ADAPTIVE_LIVE_ENABLED=True,
+            STATEFUL_ADAPTIVE_LIVE_MIN_FOLLOW_SCORE=0.86,
+            STATEFUL_ADAPTIVE_LIVE_MIN_FOLLOW_CONFIRMATIONS=5,
+            FEE_EDGE_QUALITY_GATE_ENABLED=False,
+        )
+    )
+    impulse = _market(
+        range_180s_pct=0.0011,
+        range_position_180s=0.92,
+        return_15s_pct=0.00042,
+        return_60s_pct=0.0012,
+        return_180s_pct=0.0027,
+        taker_buy_ratio_10s=0.80,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.40,
+        depth_imbalance_top5=0.60,
+        open_interest_change_5m_pct=0.001,
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00025, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00036, "taker_buy_ratio_10s": 0.76}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00045, "taker_buy_ratio_10s": 0.80}))
+
     assert confirmed.action == DecisionAction.propose_long
     assert confirmed.mode is not None
     assert confirmed.mode.value == "slow"
     assert confirmed.leverage == 80
     assert confirmed.target_move_pct == 0.002
     assert confirmed.evidence["trade_profile"] == "adaptive_low_range"
-    assert confirmed.evidence["stateful_momentum_filter"]["target_feasible"] is False
-    assert confirmed.evidence["stateful_momentum_filter"]["adaptive_entry_allowed"] is True
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert stateful_filter["adaptive_low_range_live_gate"]["allowed"] is True
+    assert stateful_filter["entry_follow_through_gate"]["confirmations"] == 5
 

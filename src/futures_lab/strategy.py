@@ -206,6 +206,11 @@ class HitAndRunStrategy:
         )
         if higher_timeframe_gate.get("profile") == "eth_counter_htf_bounce":
             min_score = min(min_score, self.settings.counter_htf_bounce_min_score)
+        trade_profile = self._stateful_filter_trade_profile(
+            adaptive_entry_allowed=adaptive_entry_allowed,
+            target_feasible=target_feasible,
+            higher_timeframe_gate=higher_timeframe_gate,
+        )
         required_score = max(min_score, opposing_score + 0.04)
         local_execution_gate = self._local_execution_gate(side, market, higher_timeframe_gate)
         fee_edge_gate = self._fee_edge_quality_gate(
@@ -213,7 +218,7 @@ class HitAndRunStrategy:
             adaptive_gate=adaptive_gate,
             market=market,
             target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
-            trade_profile=str(higher_timeframe_gate.get("profile") or "fast"),
+            trade_profile=trade_profile,
         )
         cross_market_confirmation_gate = self._cross_market_confirmation_gate(side, market, score)
         duplicate_gate = self._duplicate_signal_gate(
@@ -222,13 +227,18 @@ class HitAndRunStrategy:
             market=market,
             score=score,
             quality_score=float(adaptive_gate.get("quality_score") or 0.0),
-            profile=str(higher_timeframe_gate.get("profile") or "fast"),
+            profile=trade_profile,
         )
         entry_follow_through_gate = self._entry_follow_through_gate(
             side=side,
             market=market,
             target_move_pct=float(higher_timeframe_gate["target_move_pct"]),
-            trade_profile=str(higher_timeframe_gate.get("profile") or "fast"),
+            trade_profile=trade_profile,
+        )
+        adaptive_live_gate = self._adaptive_low_range_live_gate(
+            adaptive_entry_allowed=adaptive_entry_allowed,
+            target_feasible=target_feasible,
+            entry_follow_through_gate=entry_follow_through_gate,
         )
         weak_neutral_short_gate = self._weak_neutral_short_gate(
             side=side,
@@ -265,6 +275,8 @@ class HitAndRunStrategy:
             blockers.append(duplicate_gate["blocker"])
         if not entry_follow_through_gate["allowed"]:
             blockers.append(entry_follow_through_gate["blocker"])
+        if not adaptive_live_gate["allowed"]:
+            blockers.append(adaptive_live_gate["blocker"])
         if not weak_neutral_short_gate["allowed"]:
             blockers.append(weak_neutral_short_gate["blocker"])
         if not weak_neutral_long_gate["allowed"]:
@@ -290,6 +302,7 @@ class HitAndRunStrategy:
             "cross_market_gate": cross_market_confirmation_gate,
             "duplicate_signal_gate": duplicate_gate,
             "entry_follow_through_gate": entry_follow_through_gate,
+            "adaptive_low_range_live_gate": adaptive_live_gate,
             "weak_neutral_short_gate": weak_neutral_short_gate,
             "weak_neutral_long_gate": weak_neutral_long_gate,
             "range_180s_pct": market.range_180s_pct,
@@ -306,7 +319,7 @@ class HitAndRunStrategy:
                 market=market,
                 score=score,
                 quality_score=float(adaptive_gate.get("quality_score") or 0.0),
-                profile=str(higher_timeframe_gate.get("profile") or "fast"),
+                profile=trade_profile,
             )
         if row["blocked"] and "duplicate_signal" not in blockers:
             shadow = self._shadow_trade_signal(side, market, score, blockers, fee_edge_gate)
@@ -346,6 +359,12 @@ class HitAndRunStrategy:
             return (
                 "stateful momentum confirmed but duplicate signal throttle blocked repeat entry: "
                 f"elapsed={gate.get('elapsed_seconds')}s"
+            )
+        if "adaptive_low_range_shadow_only" in stateful_filter["blockers"]:
+            gate = stateful_filter.get("adaptive_low_range_live_gate") or {}
+            return (
+                "stateful momentum confirmed but adaptive low-range profile is shadow-only: "
+                f"follow_score={gate.get('follow_score')} required={gate.get('min_follow_score')}"
             )
         if "entry_follow_through" in stateful_filter["blockers"]:
             gate = stateful_filter.get("entry_follow_through_gate") or {}
@@ -394,6 +413,60 @@ class HitAndRunStrategy:
     def _cross_market_confirmation_gate(self, side: str, market: MarketState, score: float) -> dict:
         side_enum = Side.long if side == "long" else Side.short
         return cross_market_gate(self.settings, market, side_enum, score)
+
+    def _stateful_filter_trade_profile(
+        self,
+        adaptive_entry_allowed: bool,
+        target_feasible: bool,
+        higher_timeframe_gate: dict,
+    ) -> str:
+        if adaptive_entry_allowed and not target_feasible:
+            return "adaptive_low_range"
+        return str(higher_timeframe_gate.get("profile") or "fast")
+
+    def _adaptive_low_range_live_gate(
+        self,
+        adaptive_entry_allowed: bool,
+        target_feasible: bool,
+        entry_follow_through_gate: dict,
+    ) -> dict:
+        applies = adaptive_entry_allowed and not target_feasible
+        follow_score = float(entry_follow_through_gate.get("score") or 0.0)
+        confirmations = int(entry_follow_through_gate.get("confirmations") or 0)
+        required_confirmations = max(1, min(5, self.settings.stateful_adaptive_live_min_follow_confirmations))
+        min_follow_score = self.settings.stateful_adaptive_live_min_follow_score
+        strict_follow = bool(entry_follow_through_gate.get("strict_mandatory_confirmed"))
+        live_enabled = self.settings.stateful_adaptive_live_enabled
+        allowed = (
+            not applies
+            or (
+                live_enabled
+                and strict_follow
+                and confirmations >= required_confirmations
+                and follow_score >= min_follow_score
+            )
+        )
+        blockers: list[str] = []
+        if applies and not live_enabled:
+            blockers.append("live_disabled")
+        if applies and live_enabled and not strict_follow:
+            blockers.append("strict_follow_through")
+        if applies and live_enabled and confirmations < required_confirmations:
+            blockers.append("confirmations")
+        if applies and live_enabled and follow_score < min_follow_score:
+            blockers.append("follow_score")
+        return {
+            "enabled": live_enabled,
+            "applies": applies,
+            "allowed": allowed,
+            "blocker": None if allowed else "adaptive_low_range_shadow_only",
+            "blockers": blockers,
+            "follow_score": follow_score,
+            "min_follow_score": min_follow_score,
+            "confirmations": confirmations,
+            "min_confirmations": required_confirmations,
+            "strict_mandatory_confirmed": strict_follow,
+        }
 
     def _fee_edge_quality_gate(
         self,
@@ -563,7 +636,14 @@ class HitAndRunStrategy:
             + 0.18 * pressure_score,
             4,
         )
+        min_score = self.settings.entry_follow_through_min_score
         required_confirmations = max(1, min(5, self.settings.entry_follow_through_min_confirmations))
+        if trade_profile == "adaptive_low_range":
+            min_score = max(min_score, self.settings.stateful_adaptive_live_min_follow_score)
+            required_confirmations = max(
+                required_confirmations,
+                max(1, min(5, self.settings.stateful_adaptive_live_min_follow_confirmations)),
+            )
         strict_mandatory = checks["return_15s"] and checks["flow_10s"]
         htf_aligned_override = (
             trade_profile == "htf_aligned_fast"
@@ -587,7 +667,7 @@ class HitAndRunStrategy:
             or not applies
             or (
                 confirmations >= required_confirmations
-                and score >= self.settings.entry_follow_through_min_score
+                and score >= min_score
                 and mandatory
             )
         )
@@ -600,7 +680,7 @@ class HitAndRunStrategy:
             "trade_profile": trade_profile,
             "target_move_pct": target_move_pct,
             "score": score,
-            "min_score": self.settings.entry_follow_through_min_score,
+            "min_score": min_score,
             "htf_aligned_override_score": self.settings.entry_follow_through_htf_aligned_override_score,
             "counter_htf_bounce_override_score": self.settings.entry_follow_through_counter_htf_bounce_override_score,
             "confirmations": confirmations,

@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     stateful_adaptive_min_quality_short: float = Field(default=0.68, alias="STATEFUL_ADAPTIVE_MIN_QUALITY_SHORT")
     stateful_adaptive_target_move_pct: float = Field(default=0.0020, alias="STATEFUL_ADAPTIVE_TARGET_MOVE_PCT")
     stateful_adaptive_stop_move_pct: float = Field(default=0.0015, alias="STATEFUL_ADAPTIVE_STOP_MOVE_PCT")
+    stateful_adaptive_live_enabled: bool = Field(default=False, alias="STATEFUL_ADAPTIVE_LIVE_ENABLED")
+    stateful_adaptive_live_min_follow_score: float = Field(
+        default=0.88,
+        alias="STATEFUL_ADAPTIVE_LIVE_MIN_FOLLOW_SCORE",
+    )
+    stateful_adaptive_live_min_follow_confirmations: int = Field(
+        default=5,
+        alias="STATEFUL_ADAPTIVE_LIVE_MIN_FOLLOW_CONFIRMATIONS",
+    )
     higher_timeframe_execution_gate_enabled: bool = Field(default=True, alias="HIGHER_TIMEFRAME_EXECUTION_GATE_ENABLED")
     higher_timeframe_gate_min_strength: float = Field(default=0.35, alias="HIGHER_TIMEFRAME_GATE_MIN_STRENGTH")
     higher_timeframe_countertrend_min_quality: float = Field(default=0.86, alias="HIGHER_TIMEFRAME_COUNTERTREND_MIN_QUALITY")
