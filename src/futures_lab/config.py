@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     consume_liquidation_stream: bool = Field(default=True, alias="CONSUME_LIQUIDATION_STREAM")
     consume_book_ticker_min_interval_ms: int = Field(default=250, alias="CONSUME_BOOK_TICKER_MIN_INTERVAL_MS")
     record_book_ticker_min_interval_ms: int = Field(default=250, alias="RECORD_BOOK_TICKER_MIN_INTERVAL_MS")
+    record_agg_trade_stream: bool = Field(default=False, alias="RECORD_AGG_TRADE_STREAM")
+    record_agg_trade_min_interval_ms: int = Field(default=250, alias="RECORD_AGG_TRADE_MIN_INTERVAL_MS")
     raw_rotation_minutes: int = Field(default=60, alias="RAW_ROTATION_MINUTES")
     compress_rotated_raw: bool = Field(default=True, alias="COMPRESS_ROTATED_RAW")
     write_feature_log: bool = Field(default=True, alias="WRITE_FEATURE_LOG")

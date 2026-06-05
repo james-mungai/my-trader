@@ -157,6 +157,46 @@ def test_book_ticker_ingestion_can_be_throttled(tmp_path):
     assert recorder._should_ingest_payload(envelope, envelope["data"], first + timedelta(milliseconds=50))
 
 
+def test_agg_trade_raw_recording_can_be_disabled_while_consumed(tmp_path):
+    settings = Settings(
+        DATA_DIR=str(tmp_path),
+        SYMBOL="ETHUSDT",
+        RECORD_RAW_WS=True,
+        RECORD_AGG_TRADE_STREAM=False,
+    )
+    recorder = BinanceStreamRecorder(settings, MarketStateBook(settings), AuditLog(settings))
+    first = datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
+    envelope = {
+        "stream": "ethusdt@aggTrade",
+        "data": {
+            "e": "aggTrade",
+            "E": int(first.timestamp() * 1000),
+            "s": "ETHUSDT",
+            "p": "100.00",
+            "q": "2",
+            "m": False,
+        },
+    }
+
+    assert recorder._should_ingest_payload(envelope, envelope["data"], first)
+    assert not recorder._should_record_event("ETHUSDT", "aggTrade", first)
+
+
+def test_agg_trade_raw_recording_can_be_throttled(tmp_path):
+    settings = Settings(
+        DATA_DIR=str(tmp_path),
+        SYMBOL="ETHUSDT",
+        RECORD_AGG_TRADE_STREAM=True,
+        RECORD_AGG_TRADE_MIN_INTERVAL_MS=100,
+    )
+    recorder = BinanceStreamRecorder(settings, MarketStateBook(settings), AuditLog(settings))
+    first = datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
+
+    assert recorder._should_record_event("ETHUSDT", "aggTrade", first)
+    assert not recorder._should_record_event("ETHUSDT", "aggTrade", first + timedelta(milliseconds=50))
+    assert recorder._should_record_event("ETHUSDT", "aggTrade", first + timedelta(milliseconds=100))
+
+
 def test_partial_depth_stream_replaces_book_even_with_depth_update_event(tmp_path):
     settings = Settings(
         DATA_DIR=str(tmp_path),

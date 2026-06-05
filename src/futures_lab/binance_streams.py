@@ -211,9 +211,26 @@ class BinanceStreamRecorder:
     def _should_record_event(self, symbol: str, event: str, now: datetime) -> bool:
         if event in {"depthUpdate", "partialDepth"} and not self.settings.record_depth_stream:
             return False
+        if event == "aggTrade":
+            if not self.settings.record_agg_trade_stream:
+                return False
+            return self._record_interval_allows(
+                symbol=symbol,
+                event=event,
+                now=now,
+                interval_ms=self.settings.record_agg_trade_min_interval_ms,
+            )
         if event != "bookTicker":
             return True
-        interval = max(0, self.settings.record_book_ticker_min_interval_ms)
+        return self._record_interval_allows(
+            symbol=symbol,
+            event=event,
+            now=now,
+            interval_ms=self.settings.record_book_ticker_min_interval_ms,
+        )
+
+    def _record_interval_allows(self, symbol: str, event: str, now: datetime, interval_ms: int) -> bool:
+        interval = max(0, interval_ms)
         if interval <= 0:
             return True
         key = f"{symbol}:{event}"
