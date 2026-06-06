@@ -39,6 +39,11 @@ def build_cross_market_context(
             "vamp_mid_bps": anchor.vamp_mid_bps,
             "spread_bps": anchor.spread_bps,
             "exchange_event_lag_ms": anchor.exchange_event_lag_ms,
+            "avg_event_lag_30s_ms": anchor.avg_event_lag_30s_ms,
+            "hot_event_lag_ms": anchor.hot_event_lag_ms,
+            "avg_hot_event_lag_30s_ms": anchor.avg_hot_event_lag_30s_ms,
+            "context_event_lag_ms": anchor.context_event_lag_ms,
+            "avg_context_event_lag_30s_ms": anchor.avg_context_event_lag_30s_ms,
         },
         "relative": {
             "primary_symbol": primary.symbol,
@@ -140,7 +145,11 @@ def _context_stale(settings: Settings, market: MarketState) -> bool:
     age = market.cross_market_context_age_seconds
     if age is None:
         return True
-    lag_ms = (market.cross_market_context.get("anchor") or {}).get("exchange_event_lag_ms")
+    lag_ms = (market.cross_market_context.get("anchor") or {}).get("avg_hot_event_lag_30s_ms")
+    if lag_ms is None:
+        lag_ms = (market.cross_market_context.get("anchor") or {}).get("hot_event_lag_ms")
+    if lag_ms is None:
+        lag_ms = (market.cross_market_context.get("anchor") or {}).get("exchange_event_lag_ms")
     if lag_ms is not None and float(lag_ms) > settings.max_exchange_event_lag_ms:
         return True
     return age > max(1.0, settings.cross_market_max_context_age_seconds)

@@ -101,7 +101,7 @@ def test_candidate_outcome_tracker_does_not_open_on_lagged_exchange_events():
 
     opened = tracker.open_from_decision(
         _decision(),
-        _market(100.0, start, avg_event_lag_30s_ms=5_000),
+        _market(100.0, start, avg_hot_event_lag_30s_ms=5_000),
         opened_at=start,
     )
 

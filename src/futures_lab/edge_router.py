@@ -323,7 +323,11 @@ class EdgeRouter:
             and market.spread_bps_std_5s > self.settings.taker_impulse_max_spread_std_bps
         ):
             blockers.append("impulse_spread_unstable")
-        lag_ms = market.avg_event_lag_30s_ms if market.avg_event_lag_30s_ms is not None else market.exchange_event_lag_ms
+        lag_ms = (
+            market.avg_hot_event_lag_30s_ms
+            if market.avg_hot_event_lag_30s_ms is not None
+            else market.hot_event_lag_ms
+        )
         if lag_ms is not None and lag_ms > self.settings.taker_impulse_max_event_lag_ms:
             blockers.append("impulse_book_lagged")
         return blockers
@@ -340,7 +344,11 @@ class EdgeRouter:
         blockers = []
         if market.data_age_seconds is None or market.data_age_seconds > self.settings.stale_after_seconds:
             blockers.append("stale_data")
-        lag_ms = market.avg_event_lag_30s_ms if market.avg_event_lag_30s_ms is not None else market.exchange_event_lag_ms
+        lag_ms = (
+            market.avg_hot_event_lag_30s_ms
+            if market.avg_hot_event_lag_30s_ms is not None
+            else market.hot_event_lag_ms
+        )
         if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
             blockers.append("exchange_event_lagged")
         if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:

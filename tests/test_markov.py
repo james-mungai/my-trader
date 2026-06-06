@@ -68,9 +68,9 @@ def test_market_state_machine_confirms_short_sequence_and_blocks_stale_data():
 
 def test_market_state_machine_blocks_high_exchange_event_lag():
     machine = MarketStateMachine(max_exchange_event_lag_ms=1_000)
-    market = _market(avg_event_lag_30s_ms=5_000)
+    market = _market(avg_hot_event_lag_30s_ms=5_000)
 
     blocked = machine.update(market)
 
     assert blocked.state == MarketSequenceState.data_blocked
-    assert "exchange event lag=5000ms" in blocked.blockers
+    assert "hot exchange event lag=5000ms" in blocked.blockers

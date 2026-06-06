@@ -4,6 +4,7 @@ import pytest
 
 from futures_lab.config import Settings
 from futures_lab.market_state import MarketStateBook
+from futures_lab.models import Regime
 
 
 def test_market_state_rolls_depth_liquidation_and_latency_features():
@@ -51,6 +52,8 @@ def test_market_state_rolls_depth_liquidation_and_latency_features():
     assert snapshot.liquidation_buy_ratio_30s == 1.0
     assert snapshot.exchange_event_lag_ms == 25
     assert snapshot.avg_event_lag_30s_ms == 25
+    assert snapshot.hot_event_lag_ms == 25
+    assert snapshot.avg_hot_event_lag_30s_ms == 25
 
 
 def test_depth_snapshot_updates_top_of_book_without_book_ticker():
@@ -129,7 +132,51 @@ def test_market_state_drops_exchange_events_that_arrive_too_late():
     assert snapshot.last_trade_price is None
     assert snapshot.last_received_at is None
     assert snapshot.exchange_event_lag_ms == 10_000
+    assert snapshot.hot_event_lag_ms == 10_000
     assert snapshot.regime.value == "stale"
+
+
+def test_market_state_context_lag_does_not_stale_fresh_hot_book():
+    settings = Settings(MAX_EXCHANGE_EVENT_LAG_MS=1_000, MIN_WARMUP_SECONDS=1, STALE_AFTER_SECONDS=999)
+    book = MarketStateBook(settings)
+    book.set_connected(True)
+    start = datetime(2026, 6, 6, 9, 0, tzinfo=timezone.utc)
+
+    assert book.ingest(
+        {
+            "lastUpdateId": 1,
+            "E": int(start.timestamp() * 1000),
+            "bids": [["100.00", "4"], ["99.99", "2"]],
+            "asks": [["100.01", "3"], ["100.02", "1"]],
+        },
+        received_at=start,
+    )
+    assert book.ingest(
+        {
+            "lastUpdateId": 2,
+            "E": int((start + timedelta(seconds=2)).timestamp() * 1000),
+            "bids": [["100.05", "4"], ["100.04", "2"]],
+            "asks": [["100.06", "3"], ["100.07", "1"]],
+        },
+        received_at=start + timedelta(seconds=2),
+    )
+    accepted_context = book.ingest(
+        {
+            "e": "markPriceUpdate",
+            "E": int((start - timedelta(seconds=10)).timestamp() * 1000),
+            "p": "100.05",
+            "r": "0",
+        },
+        received_at=start + timedelta(seconds=2, milliseconds=100),
+    )
+
+    snapshot = book.snapshot(current=start + timedelta(seconds=2, milliseconds=100))
+
+    assert accepted_context is True
+    assert snapshot.context_event_lag_ms == 12_100
+    assert snapshot.hot_event_lag_ms == 0
+    assert snapshot.avg_hot_event_lag_30s_ms == 0
+    assert snapshot.regime != Regime.stale
 
 
 def test_market_state_rolls_microstructure_features():

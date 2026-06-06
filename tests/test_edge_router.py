@@ -45,6 +45,7 @@ def _market(**overrides) -> MarketState:
         "higher_timeframe_bias_side": "short",
         "higher_timeframe_bias_strength": 0.72,
         "avg_event_lag_30s_ms": 20.0,
+        "avg_hot_event_lag_30s_ms": 20.0,
         "regime": Regime.directional,
     }
     base.update(overrides)
@@ -104,7 +105,7 @@ def test_taker_impulse_requires_one_and_five_second_confirmation():
 def test_taker_impulse_blocks_unstable_or_lagged_book():
     router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
 
-    result = router.evaluate(_market(spread_bps_std_5s=1.2, avg_event_lag_30s_ms=900.0))
+    result = router.evaluate(_market(spread_bps_std_5s=1.2, avg_hot_event_lag_30s_ms=900.0))
     impulse_short = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "taker_impulse_short")
 
     assert "impulse_spread_unstable" in impulse_short["blockers"]
@@ -114,7 +115,7 @@ def test_taker_impulse_blocks_unstable_or_lagged_book():
 def test_router_base_blocks_high_exchange_event_lag():
     router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0, MAX_EXCHANGE_EVENT_LAG_MS=1_000))
 
-    result = router.evaluate(_market(avg_event_lag_30s_ms=5_000))
+    result = router.evaluate(_market(avg_hot_event_lag_30s_ms=5_000))
     impulse_short = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "taker_impulse_short")
 
     assert "exchange_event_lagged" in impulse_short["blockers"]

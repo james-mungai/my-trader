@@ -824,9 +824,13 @@ class HitAndRunStrategy:
             blockers.append("missing mid price")
         if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:
             blockers.append(f"spread not tradable: {market.spread_bps}")
-        lag_ms = market.avg_event_lag_30s_ms if market.avg_event_lag_30s_ms is not None else market.exchange_event_lag_ms
+        lag_ms = (
+            market.avg_hot_event_lag_30s_ms
+            if market.avg_hot_event_lag_30s_ms is not None
+            else market.hot_event_lag_ms
+        )
         if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
-            blockers.append(f"exchange event lag too high: {lag_ms:.0f}ms")
+            blockers.append(f"hot exchange event lag too high: {lag_ms:.0f}ms")
         if market.range_position_180s is None:
             blockers.append("missing range position")
         if market.taker_buy_ratio_10s is None:
@@ -1827,6 +1831,10 @@ class HitAndRunStrategy:
             "mark_last_basis_bps": market.mark_last_basis_bps,
             "exchange_event_lag_ms": market.exchange_event_lag_ms,
             "avg_event_lag_30s_ms": market.avg_event_lag_30s_ms,
+            "hot_event_lag_ms": market.hot_event_lag_ms,
+            "avg_hot_event_lag_30s_ms": market.avg_hot_event_lag_30s_ms,
+            "context_event_lag_ms": market.context_event_lag_ms,
+            "avg_context_event_lag_30s_ms": market.avg_context_event_lag_30s_ms,
             "funding_rate": market.funding_rate,
             "effective_cost": estimate_effective_cost(self.settings, market).model_dump(),
         }
