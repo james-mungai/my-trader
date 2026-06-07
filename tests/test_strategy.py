@@ -435,6 +435,7 @@ def test_stateful_momentum_allows_eth_counter_htf_bounce_when_local_context_conf
             COUNTER_HTF_BOUNCE_MIN_QUALITY=0.65,
             COUNTER_HTF_BOUNCE_MIN_SCORE=0.70,
             COUNTER_HTF_BOUNCE_MIN_SEQUENCE_CONFIDENCE=0.85,
+            COUNTER_HTF_BOUNCE_LIVE_ENABLED=True,
             FEE_EDGE_FAST_MIN_QUALITY=0.65,
             FEE_EDGE_FAST_MIN_SEQUENCE_CONFIDENCE=0.85,
         )
@@ -487,8 +488,71 @@ def test_stateful_momentum_allows_eth_counter_htf_bounce_when_local_context_conf
     assert confirmed.target_move_pct == 0.002
 
 
-def test_stateful_momentum_allows_eth_counter_htf_bounce_with_relief_follow_through_override():
+def test_stateful_momentum_keeps_eth_counter_htf_bounce_shadow_only_by_default():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    impulse = _market(
+        symbol="ETHUSDT",
+        range_180s_pct=0.0022,
+        range_position_180s=0.90,
+        return_15s_pct=0.00025,
+        return_60s_pct=0.0014,
+        return_180s_pct=0.0030,
+        taker_buy_ratio_10s=0.78,
+        taker_buy_ratio_30s=0.72,
+        book_imbalance_top=0.35,
+        depth_imbalance_top5=0.55,
+        open_interest_change_5m_pct=0.001,
+        higher_timeframe_context={
+            "bias": {"side": "short", "strength": 0.62, "reason": "4h/1d downtrend"},
+            "timeframes": {
+                "5m": {
+                    "structure": "uptrend_pullback",
+                    "trend_score": 0.58,
+                    "range_position": 0.70,
+                    "taker_buy_ratio": 0.54,
+                },
+                "1h": {
+                    "structure": "downtrend_bounce",
+                    "trend_score": -0.08,
+                    "return_pct": 0.001,
+                    "range_position": 0.54,
+                },
+            },
+        },
+        higher_timeframe_context_age_seconds=30,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=0.62,
+        higher_timeframe_bias_reason="4h/1d downtrend",
+    )
+
+    strategy.decide(impulse)
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": -0.00020, "taker_buy_ratio_10s": 0.56}))
+    strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00028, "taker_buy_ratio_10s": 0.74}))
+    confirmed = strategy.decide(impulse.model_copy(update={"return_15s_pct": 0.00030, "taker_buy_ratio_10s": 0.78}))
+
+    assert confirmed.action == DecisionAction.wait
+    stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert "counter_htf_bounce_shadow_only" in stateful_filter["blockers"]
+    assert "shadow_trade" in stateful_filter
+    assert "counter-HTF bounce profile is shadow-only" in confirmed.reason
+    assert stateful_filter["higher_timeframe_gate"]["profile"] == "eth_counter_htf_bounce"
+    gate = stateful_filter["entry_follow_through_gate"]
+    assert gate["checks"]["return_15s"] is False
+    assert gate["strict_mandatory_confirmed"] is False
+    assert gate["counter_htf_bounce_override_confirmed"] is True
+    assert gate["allowed"] is True
+    assert stateful_filter["fee_edge_gate"]["trade_profile"] == "eth_counter_htf_bounce"
+    assert stateful_filter["fee_edge_gate"]["allowed"] is True
+
+
+def test_stateful_momentum_allows_eth_counter_htf_bounce_when_live_enabled():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            COUNTER_HTF_BOUNCE_LIVE_ENABLED=True,
+        )
+    )
     impulse = _market(
         symbol="ETHUSDT",
         range_180s_pct=0.0022,
@@ -531,18 +595,18 @@ def test_stateful_momentum_allows_eth_counter_htf_bounce_with_relief_follow_thro
 
     assert confirmed.action == DecisionAction.propose_long
     stateful_filter = confirmed.evidence["stateful_momentum_filter"]
+    assert "counter_htf_bounce_shadow_only" not in stateful_filter["blockers"]
     assert stateful_filter["higher_timeframe_gate"]["profile"] == "eth_counter_htf_bounce"
-    gate = stateful_filter["entry_follow_through_gate"]
-    assert gate["checks"]["return_15s"] is False
-    assert gate["strict_mandatory_confirmed"] is False
-    assert gate["counter_htf_bounce_override_confirmed"] is True
-    assert gate["allowed"] is True
-    assert stateful_filter["fee_edge_gate"]["trade_profile"] == "eth_counter_htf_bounce"
-    assert stateful_filter["fee_edge_gate"]["allowed"] is True
 
 
 def test_stateful_momentum_allows_eth_counter_htf_bounce_when_one_hour_leads_relief():
-    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="stateful_momentum"))
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="stateful_momentum",
+            COUNTER_HTF_BOUNCE_LIVE_ENABLED=True,
+        )
+    )
     impulse = _market(
         symbol="ETHUSDT",
         range_180s_pct=0.0034,

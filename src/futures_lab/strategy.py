@@ -275,6 +275,8 @@ class HitAndRunStrategy:
             blockers.append(duplicate_gate["blocker"])
         if not entry_follow_through_gate["allowed"]:
             blockers.append(entry_follow_through_gate["blocker"])
+        if trade_profile == "eth_counter_htf_bounce" and not self.settings.counter_htf_bounce_live_enabled:
+            blockers.append("counter_htf_bounce_shadow_only")
         if not adaptive_live_gate["allowed"]:
             blockers.append(adaptive_live_gate["blocker"])
         if not weak_neutral_short_gate["allowed"]:
@@ -365,6 +367,12 @@ class HitAndRunStrategy:
             return (
                 "stateful momentum confirmed but adaptive low-range profile is shadow-only: "
                 f"follow_score={gate.get('follow_score')} required={gate.get('min_follow_score')}"
+            )
+        if "counter_htf_bounce_shadow_only" in stateful_filter["blockers"]:
+            gate = (stateful_filter.get("higher_timeframe_gate") or {}).get("counter_bounce_gate") or {}
+            return (
+                "stateful momentum confirmed but ETH counter-HTF bounce profile is shadow-only: "
+                f"quality={gate.get('quality_score')} score={gate.get('score')}"
             )
         if "entry_follow_through" in stateful_filter["blockers"]:
             gate = stateful_filter.get("entry_follow_through_gate") or {}

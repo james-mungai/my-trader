@@ -100,6 +100,7 @@ class Settings(BaseSettings):
         alias="HIGHER_TIMEFRAME_STRONG_EXCEPTION_TARGET_MOVE_PCT",
     )
     counter_htf_bounce_enabled: bool = Field(default=True, alias="COUNTER_HTF_BOUNCE_ENABLED")
+    counter_htf_bounce_live_enabled: bool = Field(default=False, alias="COUNTER_HTF_BOUNCE_LIVE_ENABLED")
     counter_htf_bounce_symbols: str = Field(default="ETHUSDT", alias="COUNTER_HTF_BOUNCE_SYMBOLS")
     counter_htf_bounce_min_quality: float = Field(default=0.68, alias="COUNTER_HTF_BOUNCE_MIN_QUALITY")
     counter_htf_bounce_min_score: float = Field(default=0.70, alias="COUNTER_HTF_BOUNCE_MIN_SCORE")
