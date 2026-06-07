@@ -131,6 +131,23 @@ def test_hot_split_stream_profile_can_omit_primary_book_ticker(tmp_path):
     assert all("btcusdt@bookTicker" not in spec.streams for spec in specs)
 
 
+def test_depth_stream_update_speed_is_configurable(tmp_path):
+    slow_settings = Settings(
+        DATA_DIR=str(tmp_path),
+        SYMBOL="ETHUSDT",
+        BINANCE_STREAM_PROFILE="hot-split",
+        CONSUME_BOOK_TICKER_STREAM=False,
+        DEPTH_UPDATE_SPEED_MS=500,
+    )
+    default_settings = slow_settings.model_copy(update={"depth_update_speed_ms": 250})
+
+    slow = BinanceStreamRecorder(slow_settings, MarketStateBook(slow_settings), AuditLog(slow_settings))
+    default = BinanceStreamRecorder(default_settings, MarketStateBook(default_settings), AuditLog(default_settings))
+
+    assert slow._stream_specs()[0].streams == ("ethusdt@depth5@500ms",)
+    assert default._stream_specs()[0].streams == ("ethusdt@depth5",)
+
+
 def test_book_ticker_ingestion_can_be_throttled(tmp_path):
     settings = Settings(
         DATA_DIR=str(tmp_path),

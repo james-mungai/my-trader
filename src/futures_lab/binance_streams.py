@@ -85,7 +85,7 @@ class BinanceStreamRecorder:
         depth_stream = None
         if self.settings.consume_depth_stream or self.settings.record_depth_stream:
             levels = self._supported_depth_levels(self.settings.depth_levels)
-            depth_stream = f"{symbol}@depth{levels}@100ms"
+            depth_stream = self._depth_stream_name(symbol, levels)
 
         book_ticker_stream = f"{symbol}@bookTicker" if self.settings.consume_book_ticker_stream else None
         primary_public = (*((book_ticker_stream,) if book_ticker_stream else ()), *((depth_stream,) if depth_stream else ()))
@@ -362,3 +362,15 @@ class BinanceStreamRecorder:
             if requested <= level:
                 return level
         return 20
+
+    def _depth_stream_name(self, symbol: str, levels: int) -> str:
+        speed_ms = self._supported_depth_speed_ms(self.settings.depth_update_speed_ms)
+        suffix = "" if speed_ms == 250 else f"@{speed_ms}ms"
+        return f"{symbol}@depth{levels}{suffix}"
+
+    def _supported_depth_speed_ms(self, requested: int) -> int:
+        if requested <= 100:
+            return 100
+        if requested <= 250:
+            return 250
+        return 500
