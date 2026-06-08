@@ -124,7 +124,7 @@ class HostileReplayBroker(PaperBroker):
         if market.data_age_seconds is not None and market.data_age_seconds > max_book_age_seconds:
             return "stale_book"
         max_lag = max(0.0, self.settings.hostile_replay_max_event_lag_ms)
-        lag_ms = market.hot_event_lag_ms if market.hot_event_lag_ms is not None else market.exchange_event_lag_ms
+        lag_ms = market.book_freshness_lag_ms if market.book_freshness_lag_ms is not None else market.hot_freshness_lag_ms
         if lag_ms is not None and lag_ms > max_lag:
             return "stale_book"
         if self.settings.default_entry_order_type.strip().lower() == "maker" and not self._maker_queue_fill_allowed(decision):

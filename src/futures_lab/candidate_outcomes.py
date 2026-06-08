@@ -62,11 +62,7 @@ class CandidateOutcomeTracker:
         candidates = edge_router.get("candidates") or []
         if not candidates or market.mid_price is None:
             return []
-        lag_ms = (
-            market.avg_hot_event_lag_30s_ms
-            if market.avg_hot_event_lag_30s_ms is not None
-            else market.hot_event_lag_ms
-        )
+        lag_ms = market.book_freshness_lag_ms if market.book_freshness_lag_ms is not None else market.hot_freshness_lag_ms
         if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
             return []
         current = opened_at or market.last_received_at or decision.timestamp

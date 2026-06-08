@@ -32,13 +32,9 @@ class RiskEngine:
             blockers.append("max trades per day hit")
         if market.data_age_seconds is None or market.data_age_seconds > self.settings.stale_after_seconds:
             blockers.append("market data stale")
-        lag_ms = (
-            market.avg_hot_event_lag_30s_ms
-            if market.avg_hot_event_lag_30s_ms is not None
-            else market.hot_event_lag_ms
-        )
+        lag_ms = market.book_freshness_lag_ms if market.book_freshness_lag_ms is not None else market.hot_freshness_lag_ms
         if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
-            blockers.append(f"hot exchange event lag too high: {lag_ms:.0f}ms")
+            blockers.append(f"book exchange event lag too high: {lag_ms:.0f}ms")
         if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:
             blockers.append("spread too wide")
         if decision.target_move_pct is not None:

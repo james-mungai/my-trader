@@ -179,13 +179,9 @@ class MarketStateMachine:
             blockers.append("stream disconnected")
         if market.regime in {Regime.stale, Regime.warming_up, Regime.unknown}:
             blockers.append(f"regime={market.regime.value}")
-        lag_ms = (
-            market.avg_hot_event_lag_30s_ms
-            if market.avg_hot_event_lag_30s_ms is not None
-            else market.hot_event_lag_ms
-        )
+        lag_ms = market.book_freshness_lag_ms if market.book_freshness_lag_ms is not None else market.hot_freshness_lag_ms
         if lag_ms is not None and lag_ms > self.max_exchange_event_lag_ms:
-            blockers.append(f"hot exchange event lag={lag_ms:.0f}ms")
+            blockers.append(f"book exchange event lag={lag_ms:.0f}ms")
         if market.mid_price is None:
             blockers.append("missing mid price")
         if market.range_position_180s is None:

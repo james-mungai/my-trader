@@ -106,6 +106,12 @@ class MarketState(BaseModel):
     hot_event_lag_ms: float | None = None
     avg_hot_event_lag_30s_ms: float | None = None
     max_hot_event_lag_30s_ms: float | None = None
+    book_event_lag_ms: float | None = None
+    avg_book_event_lag_30s_ms: float | None = None
+    max_book_event_lag_30s_ms: float | None = None
+    trade_event_lag_ms: float | None = None
+    avg_trade_event_lag_30s_ms: float | None = None
+    max_trade_event_lag_30s_ms: float | None = None
     context_event_lag_ms: float | None = None
     avg_context_event_lag_30s_ms: float | None = None
     max_context_event_lag_30s_ms: float | None = None
@@ -123,6 +129,26 @@ class MarketState(BaseModel):
     btc_return_60s_pct: float | None = None
     eth_btc_relative_return_15s_pct: float | None = None
     eth_btc_relative_return_60s_pct: float | None = None
+
+    @property
+    def book_freshness_lag_ms(self) -> float | None:
+        return (
+            self.avg_book_event_lag_30s_ms
+            if self.avg_book_event_lag_30s_ms is not None
+            else self.book_event_lag_ms
+        )
+
+    @property
+    def trade_freshness_lag_ms(self) -> float | None:
+        return (
+            self.avg_trade_event_lag_30s_ms
+            if self.avg_trade_event_lag_30s_ms is not None
+            else self.trade_event_lag_ms
+        )
+
+    @property
+    def hot_freshness_lag_ms(self) -> float | None:
+        return self.avg_hot_event_lag_30s_ms if self.avg_hot_event_lag_30s_ms is not None else self.hot_event_lag_ms
     regime: Regime = Regime.unknown
 
 

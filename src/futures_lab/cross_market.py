@@ -42,6 +42,10 @@ def build_cross_market_context(
             "avg_event_lag_30s_ms": anchor.avg_event_lag_30s_ms,
             "hot_event_lag_ms": anchor.hot_event_lag_ms,
             "avg_hot_event_lag_30s_ms": anchor.avg_hot_event_lag_30s_ms,
+            "book_event_lag_ms": anchor.book_event_lag_ms,
+            "avg_book_event_lag_30s_ms": anchor.avg_book_event_lag_30s_ms,
+            "trade_event_lag_ms": anchor.trade_event_lag_ms,
+            "avg_trade_event_lag_30s_ms": anchor.avg_trade_event_lag_30s_ms,
             "context_event_lag_ms": anchor.context_event_lag_ms,
             "avg_context_event_lag_30s_ms": anchor.avg_context_event_lag_30s_ms,
         },
@@ -145,7 +149,11 @@ def _context_stale(settings: Settings, market: MarketState) -> bool:
     age = market.cross_market_context_age_seconds
     if age is None:
         return True
-    lag_ms = (market.cross_market_context.get("anchor") or {}).get("avg_hot_event_lag_30s_ms")
+    lag_ms = (market.cross_market_context.get("anchor") or {}).get("avg_book_event_lag_30s_ms")
+    if lag_ms is None:
+        lag_ms = (market.cross_market_context.get("anchor") or {}).get("book_event_lag_ms")
+    if lag_ms is None:
+        lag_ms = (market.cross_market_context.get("anchor") or {}).get("avg_hot_event_lag_30s_ms")
     if lag_ms is None:
         lag_ms = (market.cross_market_context.get("anchor") or {}).get("hot_event_lag_ms")
     if lag_ms is None:

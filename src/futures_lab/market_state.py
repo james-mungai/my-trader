@@ -111,10 +111,10 @@ class MarketStateBook:
         if event_ms is not None:
             event_at = datetime.fromtimestamp(int(event_ms) / 1000, tz=timezone.utc)
             lag_ms = max(0.0, (received_at - event_at).total_seconds() * 1000)
-            self.latencies.append(LatencyPoint(ts=received_at, lag_ms=lag_ms, event_type=event_type))
             if self._is_hot_event_type(event_type) and lag_ms > self.settings.max_exchange_event_lag_ms:
                 self._trim(received_at)
                 return False
+            self.latencies.append(LatencyPoint(ts=received_at, lag_ms=lag_ms, event_type=event_type))
             self.last_event_at = event_at
         self.last_received_at = received_at
 
@@ -281,6 +281,12 @@ class MarketStateBook:
             hot_event_lag_ms=self._last_latency(self._is_hot_event_type),
             avg_hot_event_lag_30s_ms=self._latency_avg(current, 30, self._is_hot_event_type),
             max_hot_event_lag_30s_ms=self._latency_max(current, 30, self._is_hot_event_type),
+            book_event_lag_ms=self._last_latency(self._is_book_event_type),
+            avg_book_event_lag_30s_ms=self._latency_avg(current, 30, self._is_book_event_type),
+            max_book_event_lag_30s_ms=self._latency_max(current, 30, self._is_book_event_type),
+            trade_event_lag_ms=self._last_latency(self._is_trade_event_type),
+            avg_trade_event_lag_30s_ms=self._latency_avg(current, 30, self._is_trade_event_type),
+            max_trade_event_lag_30s_ms=self._latency_max(current, 30, self._is_trade_event_type),
             context_event_lag_ms=self._last_latency(self._is_context_event_type),
             avg_context_event_lag_30s_ms=self._latency_avg(current, 30, self._is_context_event_type),
             max_context_event_lag_30s_ms=self._latency_max(current, 30, self._is_context_event_type),
@@ -342,6 +348,12 @@ class MarketStateBook:
 
     def _is_hot_event_type(self, event_type: str | None) -> bool:
         return event_type in {"aggTrade", "bookTicker", "depthUpdate", "partialDepth"}
+
+    def _is_book_event_type(self, event_type: str | None) -> bool:
+        return event_type in {"bookTicker", "depthUpdate", "partialDepth"}
+
+    def _is_trade_event_type(self, event_type: str | None) -> bool:
+        return event_type == "aggTrade"
 
     def _is_context_event_type(self, event_type: str | None) -> bool:
         return not self._is_hot_event_type(event_type)
@@ -726,11 +738,7 @@ class MarketStateBook:
     def _classify_regime(self, state: MarketState) -> Regime:
         if state.data_age_seconds is None or state.data_age_seconds > self.settings.stale_after_seconds:
             return Regime.stale
-        lag_ms = (
-            state.avg_hot_event_lag_30s_ms
-            if state.avg_hot_event_lag_30s_ms is not None
-            else state.hot_event_lag_ms
-        )
+        lag_ms = state.book_freshness_lag_ms if state.book_freshness_lag_ms is not None else state.hot_freshness_lag_ms
         if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
             return Regime.stale
         if state.observed_seconds < self.settings.min_warmup_seconds:

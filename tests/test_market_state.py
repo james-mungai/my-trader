@@ -131,9 +131,47 @@ def test_market_state_drops_exchange_events_that_arrive_too_late():
     assert accepted is False
     assert snapshot.last_trade_price is None
     assert snapshot.last_received_at is None
-    assert snapshot.exchange_event_lag_ms == 10_000
-    assert snapshot.hot_event_lag_ms == 10_000
+    assert snapshot.exchange_event_lag_ms is None
+    assert snapshot.hot_event_lag_ms is None
+    assert snapshot.trade_event_lag_ms is None
     assert snapshot.regime.value == "stale"
+
+
+def test_market_state_rejected_trade_lag_does_not_poison_fresh_book_latency():
+    settings = Settings(MAX_EXCHANGE_EVENT_LAG_MS=1_000, MIN_WARMUP_SECONDS=1, STALE_AFTER_SECONDS=999)
+    book = MarketStateBook(settings)
+    book.set_connected(True)
+    start = datetime(2026, 6, 8, 9, 0, tzinfo=timezone.utc)
+
+    assert book.ingest(
+        {
+            "lastUpdateId": 1,
+            "E": int(start.timestamp() * 1000),
+            "bids": [["100.00", "4"], ["99.99", "2"]],
+            "asks": [["100.01", "3"], ["100.02", "1"]],
+        },
+        received_at=start,
+    )
+    accepted = book.ingest(
+        {
+            "e": "aggTrade",
+            "E": int((start - timedelta(seconds=10)).timestamp() * 1000),
+            "p": "100.00",
+            "q": "1",
+            "m": False,
+        },
+        received_at=start + timedelta(seconds=2),
+    )
+
+    snapshot = book.snapshot(current=start + timedelta(seconds=2))
+
+    assert accepted is False
+    assert snapshot.book_event_lag_ms == 0
+    assert snapshot.avg_book_event_lag_30s_ms == 0
+    assert snapshot.trade_event_lag_ms is None
+    assert snapshot.hot_event_lag_ms == 0
+    assert snapshot.avg_hot_event_lag_30s_ms == 0
+    assert snapshot.regime != Regime.stale
 
 
 def test_market_state_context_lag_does_not_stale_fresh_hot_book():
@@ -174,6 +212,8 @@ def test_market_state_context_lag_does_not_stale_fresh_hot_book():
 
     assert accepted_context is True
     assert snapshot.context_event_lag_ms == 12_100
+    assert snapshot.book_event_lag_ms == 0
+    assert snapshot.avg_book_event_lag_30s_ms == 0
     assert snapshot.hot_event_lag_ms == 0
     assert snapshot.avg_hot_event_lag_30s_ms == 0
     assert snapshot.regime != Regime.stale
