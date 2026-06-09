@@ -2,7 +2,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 
 from futures_lab.config import Settings
-from futures_lab.models import DecisionAction, MarketState, Regime
+from futures_lab.models import Decision, DecisionAction, MarketState, Regime, TradeMode
 from futures_lab.paper import PaperBroker
 from futures_lab.risk import RiskEngine
 from futures_lab.strategy import HitAndRunStrategy
@@ -54,7 +54,7 @@ def test_risk_blocks_non_trade_decision():
 
 
 def test_paper_fast_trade_hits_target_after_fees():
-    settings = Settings(MIN_CONFIDENCE=0.70)
+    settings = Settings(MIN_CONFIDENCE=0.70, PAPER_LIVE_EDGE_GATE_ENABLED=False)
     market = _market(100.0)
     decision = HitAndRunStrategy(settings).decide(market)
     broker = PaperBroker(settings)
@@ -95,12 +95,86 @@ def test_risk_allows_larger_target_that_clears_effective_costs():
         EXPECTED_SLIPPAGE_BPS=0.5,
         LATENCY_ADVERSE_SELECTION_BPS=0.5,
         MIN_GROSS_TARGET_FEE_MULTIPLE=2.0,
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
     )
     market = _market(100.0, spread_bps=0.5)
     decision = HitAndRunStrategy(settings).decide(market)
     broker = PaperBroker(settings)
 
     verdict = RiskEngine(settings).evaluate(decision, market, broker.state())
+
+    assert verdict.allowed
+
+
+def _edge_decision(target_move_pct: float, selected: dict) -> Decision:
+    price = 100.0
+    return Decision(
+        symbol="BTCUSDT",
+        action=DecisionAction.propose_long,
+        mode=TradeMode.fast,
+        confidence=0.95,
+        reason="test edge",
+        entry_price=price,
+        take_profit_price=price * (1 + target_move_pct),
+        stop_loss_price=price * (1 - 0.001),
+        target_move_pct=target_move_pct,
+        stop_move_pct=0.001,
+        leverage=200,
+        stake_usd=150,
+        notional_usd=30_000,
+        evidence={"edge_router": {"selected": selected}},
+    )
+
+
+def test_risk_blocks_live_paper_when_edge_after_costs_is_too_thin():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        PAPER_LIVE_MIN_TARGET_COST_MULTIPLE=2.5,
+        PAPER_LIVE_MIN_EXPECTED_EV_BPS=4.0,
+        PAPER_LIVE_MIN_SCORE=0.82,
+        PAPER_LIVE_MIN_TP_PROBABILITY=0.82,
+    )
+    decision = _edge_decision(
+        0.002,
+        {
+            "strategy": "stateful_momentum_baseline",
+            "score": 0.78,
+            "p_hit_tp_before_sl": 0.78,
+            "expected_ev_bps": 2.0,
+        },
+    )
+
+    verdict = RiskEngine(settings).evaluate(decision, _market(spread_bps=0.5), PaperBroker(settings).state())
+
+    assert not verdict.allowed
+    joined = " ".join(verdict.blockers)
+    assert "paper live target does not clear edge costs" in joined
+    assert "paper live expected EV too low" in joined
+    assert "paper live score too low" in joined
+    assert "paper live TP probability too low" in joined
+
+
+def test_risk_allows_live_paper_when_selected_edge_is_strong_after_costs():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        PAPER_LIVE_MIN_TARGET_COST_MULTIPLE=2.5,
+        PAPER_LIVE_MIN_EXPECTED_EV_BPS=4.0,
+        PAPER_LIVE_MIN_SCORE=0.82,
+        PAPER_LIVE_MIN_TP_PROBABILITY=0.82,
+    )
+    decision = _edge_decision(
+        0.003,
+        {
+            "strategy": "taker_impulse_short",
+            "score": 0.88,
+            "p_hit_tp_before_sl": 0.88,
+            "expected_ev_bps": 6.0,
+        },
+    )
+
+    verdict = RiskEngine(settings).evaluate(decision, _market(spread_bps=0.5), PaperBroker(settings).state())
 
     assert verdict.allowed
 
@@ -119,7 +193,7 @@ def test_risk_blocks_after_daily_target_hit():
 
 
 def test_risk_blocks_during_trade_cooldown():
-    settings = Settings(MIN_CONFIDENCE=0.70, TRADE_COOLDOWN_SECONDS=1800)
+    settings = Settings(MIN_CONFIDENCE=0.70, TRADE_COOLDOWN_SECONDS=1800, PAPER_LIVE_EDGE_GATE_ENABLED=False)
     broker = PaperBroker(settings)
     market = _market()
     decision = HitAndRunStrategy(settings).decide(market)
@@ -137,7 +211,12 @@ def test_risk_blocks_during_trade_cooldown():
 
 
 def test_risk_allows_more_than_one_trade_when_daily_trade_limit_disabled():
-    settings = Settings(MIN_CONFIDENCE=0.70, MAX_TRADES_PER_DAY=0, TRADE_COOLDOWN_SECONDS=0)
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        MAX_TRADES_PER_DAY=0,
+        TRADE_COOLDOWN_SECONDS=0,
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+    )
     broker = PaperBroker(settings)
     broker.trades_today = 5
     market = _market()
@@ -151,6 +230,7 @@ def test_risk_allows_more_than_one_trade_when_daily_trade_limit_disabled():
 def test_paper_fast_failure_exits_when_trade_does_not_move_enough():
     settings = Settings(
         MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
         ENABLE_FAST_FAILURE_EXIT=True,
         FAST_FAILURE_SECONDS=180,
         FAST_FAILURE_MIN_FAVORABLE_MOVE_PCT=0.0005,
@@ -172,7 +252,12 @@ def test_paper_fast_failure_exits_when_trade_does_not_move_enough():
 
 
 def test_paper_does_not_close_from_stale_or_disconnected_market():
-    settings = Settings(MIN_CONFIDENCE=0.70, ENABLE_FAST_FAILURE_EXIT=True, FAST_FAILURE_SECONDS=180)
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        ENABLE_FAST_FAILURE_EXIT=True,
+        FAST_FAILURE_SECONDS=180,
+    )
     market = _market(100.0)
     decision = HitAndRunStrategy(settings).decide(market)
     broker = PaperBroker(settings)

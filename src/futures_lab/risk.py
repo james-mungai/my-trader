@@ -46,6 +46,7 @@ class RiskEngine:
                     f"{decision.target_move_pct:.4%} < {required_target_pct:.4%} "
                     f"(cost={effective_cost.total_cost_bps:.2f}bps)"
                 )
+            blockers.extend(self._paper_live_edge_blockers(decision, effective_cost.total_cost_bps))
         if decision.stop_move_pct is not None and decision.leverage is not None:
             leveraged_stop_loss = decision.stop_move_pct * decision.leverage
             if leveraged_stop_loss > 0.60:
@@ -54,4 +55,57 @@ class RiskEngine:
         if blockers:
             return RiskVerdict(allowed=False, reason="Risk blocked proposal.", blockers=blockers)
         return RiskVerdict(allowed=True, reason="Proposal passed paper risk checks.")
+
+    def _paper_live_edge_blockers(self, decision: Decision, cost_bps: float) -> list[str]:
+        if not self.settings.paper_live_edge_gate_enabled:
+            return []
+        blockers: list[str] = []
+        target_bps = float(decision.target_move_pct or 0.0) * 10_000
+        required_target_bps = cost_bps * self.settings.paper_live_min_target_cost_multiple
+        if target_bps < required_target_bps:
+            blockers.append(
+                "paper live target does not clear edge costs: "
+                f"{target_bps:.2f}bps < {required_target_bps:.2f}bps "
+                f"(cost={cost_bps:.2f}bps, multiple={self.settings.paper_live_min_target_cost_multiple:.2f})"
+            )
+
+        selected = self._selected_edge_candidate(decision)
+        if selected is None:
+            blockers.append("paper live edge gate missing selected candidate")
+            return blockers
+
+        expected_ev_bps = self._float_value(selected.get("expected_ev_bps"))
+        if expected_ev_bps is None or expected_ev_bps < self.settings.paper_live_min_expected_ev_bps:
+            blockers.append(
+                "paper live expected EV too low: "
+                f"{expected_ev_bps if expected_ev_bps is not None else 'missing'} "
+                f"< {self.settings.paper_live_min_expected_ev_bps:.2f}bps"
+            )
+        score = self._float_value(selected.get("score"))
+        if score is None or score < self.settings.paper_live_min_score:
+            blockers.append(
+                "paper live score too low: "
+                f"{score if score is not None else 'missing'} < {self.settings.paper_live_min_score:.2f}"
+            )
+        probability = self._float_value(selected.get("p_hit_tp_before_sl"))
+        if probability is None or probability < self.settings.paper_live_min_tp_probability:
+            blockers.append(
+                "paper live TP probability too low: "
+                f"{probability if probability is not None else 'missing'} < {self.settings.paper_live_min_tp_probability:.2f}"
+            )
+        return blockers
+
+    def _selected_edge_candidate(self, decision: Decision) -> dict | None:
+        edge_router = decision.evidence.get("edge_router") or {}
+        if not isinstance(edge_router, dict):
+            return None
+        selected = edge_router.get("selected") or edge_router.get("selected_candidate")
+        return selected if isinstance(selected, dict) else None
+
+    @staticmethod
+    def _float_value(value: object) -> float | None:
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
