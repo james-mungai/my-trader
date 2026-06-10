@@ -208,6 +208,21 @@ Acceptance:
 - [x] `futures-lab readiness-report` emits machine-readable JSON.
 - [x] Tests cover passing, failing, and insufficient-data readiness gates.
 
+## Stage 11 - Rolling Paper-Live Edge Guard
+
+Goal: keep live paper opens disabled when the selected candidates are not proving an edge over rejected candidates in the current session.
+
+- [x] Add fee-adjusted candidate outcome fields for target-before-stop and MFE-after-cost.
+- [x] Add a rolling accepted-vs-rejected quality snapshot in the candidate outcome tracker.
+- [x] Block paper-live opens when accepted candidates do not beat rejected candidates after minimum sample counts.
+- [x] Surface fee-adjusted target-before-stop rate and MFE-after-cost in `candidate-outcome-summary`.
+
+Acceptance:
+
+- [x] Tests cover blocking when accepted candidates lag the rejected baseline.
+- [x] Tests cover allowing when accepted candidates clearly outperform rejected candidates.
+- [x] Tests cover risk blocker propagation into paper-live proposals.
+
 ## Current Running Experiment
 
 - [ ] Analyze `futures-lab-recon_16h_eth_mfe_exit_20260527_091309` after completion.

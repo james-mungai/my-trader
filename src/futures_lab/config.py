@@ -242,6 +242,18 @@ class Settings(BaseSettings):
     paper_live_min_expected_ev_bps: float = Field(default=4.0, alias="PAPER_LIVE_MIN_EXPECTED_EV_BPS")
     paper_live_min_score: float = Field(default=0.82, alias="PAPER_LIVE_MIN_SCORE")
     paper_live_min_tp_probability: float = Field(default=0.82, alias="PAPER_LIVE_MIN_TP_PROBABILITY")
+    paper_live_rolling_edge_monitor_enabled: bool = Field(
+        default=True,
+        alias="PAPER_LIVE_ROLLING_EDGE_MONITOR_ENABLED",
+    )
+    paper_live_rolling_window: int = Field(default=500, alias="PAPER_LIVE_ROLLING_WINDOW")
+    paper_live_rolling_min_accepted: int = Field(default=20, alias="PAPER_LIVE_ROLLING_MIN_ACCEPTED")
+    paper_live_rolling_min_rejected: int = Field(default=100, alias="PAPER_LIVE_ROLLING_MIN_REJECTED")
+    paper_live_rolling_min_target_rate_edge: float = Field(
+        default=0.02,
+        alias="PAPER_LIVE_ROLLING_MIN_TARGET_RATE_EDGE",
+    )
+    paper_live_rolling_min_mfe_edge_bps: float = Field(default=1.0, alias="PAPER_LIVE_ROLLING_MIN_MFE_EDGE_BPS")
     edge_router_shadow_enabled: bool = Field(default=True, alias="EDGE_ROUTER_SHADOW_ENABLED")
     edge_router_min_score: float = Field(default=0.70, alias="EDGE_ROUTER_MIN_SCORE")
     edge_router_min_ev_bps: float = Field(default=1.0, alias="EDGE_ROUTER_MIN_EV_BPS")

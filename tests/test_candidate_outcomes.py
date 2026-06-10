@@ -106,3 +106,53 @@ def test_candidate_outcome_tracker_does_not_open_on_lagged_exchange_events():
     )
 
     assert opened == []
+
+
+def test_candidate_outcome_tracker_blocks_when_accepted_lags_rejected_baseline():
+    tracker = CandidateOutcomeTracker(
+        Settings(
+            PAPER_LIVE_ROLLING_WINDOW=10,
+            PAPER_LIVE_ROLLING_MIN_ACCEPTED=2,
+            PAPER_LIVE_ROLLING_MIN_REJECTED=2,
+            PAPER_LIVE_ROLLING_MIN_TARGET_RATE_EDGE=0.10,
+            PAPER_LIVE_ROLLING_MIN_MFE_EDGE_BPS=1.0,
+        )
+    )
+    tracker.rolling_closed = [
+        {"accepted": True, "fee_adjusted_target_before_stop": False, "mfe_after_cost_bps": -1.0},
+        {"accepted": True, "fee_adjusted_target_before_stop": True, "mfe_after_cost_bps": 1.0},
+        {"accepted": False, "fee_adjusted_target_before_stop": True, "mfe_after_cost_bps": 1.0},
+        {"accepted": False, "fee_adjusted_target_before_stop": False, "mfe_after_cost_bps": -1.0},
+    ]
+
+    snapshot = tracker.live_edge_quality_snapshot()
+
+    assert snapshot["ready"] is True
+    assert snapshot["block"] is True
+    assert snapshot["target_rate_edge"] == 0
+    assert snapshot["mfe_edge_bps"] == 0
+
+
+def test_candidate_outcome_tracker_allows_when_accepted_beats_rejected_baseline():
+    tracker = CandidateOutcomeTracker(
+        Settings(
+            PAPER_LIVE_ROLLING_WINDOW=10,
+            PAPER_LIVE_ROLLING_MIN_ACCEPTED=2,
+            PAPER_LIVE_ROLLING_MIN_REJECTED=2,
+            PAPER_LIVE_ROLLING_MIN_TARGET_RATE_EDGE=0.10,
+            PAPER_LIVE_ROLLING_MIN_MFE_EDGE_BPS=1.0,
+        )
+    )
+    tracker.rolling_closed = [
+        {"accepted": True, "fee_adjusted_target_before_stop": True, "mfe_after_cost_bps": 3.0},
+        {"accepted": True, "fee_adjusted_target_before_stop": True, "mfe_after_cost_bps": 5.0},
+        {"accepted": False, "fee_adjusted_target_before_stop": False, "mfe_after_cost_bps": 0.0},
+        {"accepted": False, "fee_adjusted_target_before_stop": True, "mfe_after_cost_bps": 1.0},
+    ]
+
+    snapshot = tracker.live_edge_quality_snapshot()
+
+    assert snapshot["ready"] is True
+    assert snapshot["block"] is False
+    assert snapshot["target_rate_edge"] == 0.5
+    assert snapshot["mfe_edge_bps"] == 3.5

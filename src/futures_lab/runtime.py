@@ -97,7 +97,12 @@ class TradingRuntime:
     def decide_once(self) -> tuple[MarketState, Decision, RiskVerdict]:
         market = self.market()
         decision = self.strategy.decide(market)
-        risk = self.risk.evaluate(decision, market, self.paper.state())
+        risk = self.risk.evaluate(
+            decision,
+            market,
+            self.paper.state(),
+            candidate_quality=self.candidate_outcomes.live_edge_quality_snapshot(),
+        )
         self.latest_decision = decision
         self.latest_risk = risk
         return market, decision, risk

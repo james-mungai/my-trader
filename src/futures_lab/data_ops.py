@@ -224,11 +224,13 @@ class CandidateOutcomeBucket:
     accepted: int = 0
     rejected: int = 0
     target_first: int = 0
+    fee_adjusted_target_before_stop: int = 0
     stop_first: int = 0
     timeout: int = 0
     soft_invalidation_first: int = 0
     total_mfe_60s_pct: float = 0.0
     total_mae_60s_pct: float = 0.0
+    total_mfe_after_cost_bps: float = 0.0
 
     def model_dump(self) -> dict:
         return {
@@ -236,11 +238,16 @@ class CandidateOutcomeBucket:
             "accepted": self.accepted,
             "rejected": self.rejected,
             "target_first": self.target_first,
+            "fee_adjusted_target_before_stop": self.fee_adjusted_target_before_stop,
+            "fee_adjusted_target_before_stop_rate": (
+                round(self.fee_adjusted_target_before_stop / self.samples, 6) if self.samples else None
+            ),
             "stop_first": self.stop_first,
             "timeout": self.timeout,
             "soft_invalidation_first": self.soft_invalidation_first,
             "avg_mfe_60s_pct": round(self.total_mfe_60s_pct / self.samples, 6) if self.samples else None,
             "avg_mae_60s_pct": round(self.total_mae_60s_pct / self.samples, 6) if self.samples else None,
+            "avg_mfe_after_cost_bps": round(self.total_mfe_after_cost_bps / self.samples, 3) if self.samples else None,
         }
 
 
@@ -256,6 +263,7 @@ class CandidateOutcomeSummary:
     score_buckets: dict[str, CandidateOutcomeBucket] = field(default_factory=dict)
     target_before_stop: dict[str, dict[str, int]] = field(default_factory=dict)
     outcome_labels: dict[str, int] = field(default_factory=dict)
+    fee_adjusted_outcome_labels: dict[str, int] = field(default_factory=dict)
 
     def model_dump(self) -> dict:
         return {
@@ -269,6 +277,7 @@ class CandidateOutcomeSummary:
             "score_buckets": {name: bucket.model_dump() for name, bucket in self.score_buckets.items()},
             "target_before_stop": self.target_before_stop,
             "outcome_labels": self.outcome_labels,
+            "fee_adjusted_outcome_labels": self.fee_adjusted_outcome_labels,
         }
 
 
@@ -280,6 +289,7 @@ def summarize_candidate_outcomes(settings: Settings) -> CandidateOutcomeSummary:
 
     target_before_stop: dict[str, Counter[str]] = {}
     outcome_labels: Counter[str] = Counter()
+    fee_adjusted_outcome_labels: Counter[str] = Counter()
     for path in sorted(outcome_dir.glob("*.jsonl")):
         summary.files += 1
         with path.open("r", encoding="utf-8") as handle:
@@ -306,6 +316,7 @@ def summarize_candidate_outcomes(settings: Settings) -> CandidateOutcomeSummary:
                 ]:
                     _update_candidate_bucket(bucket, row)
                 outcome_labels[str(row.get("outcome_label") or "unknown")] += 1
+                fee_adjusted_outcome_labels[str(row.get("fee_adjusted_outcome_label") or "unknown")] += 1
                 for target, stops in (row.get("target_before_stop") or {}).items():
                     target_counter = target_before_stop.setdefault(target, Counter())
                     for stop, result in stops.items():
@@ -314,6 +325,7 @@ def summarize_candidate_outcomes(settings: Settings) -> CandidateOutcomeSummary:
 
     summary.target_before_stop = {target: dict(counter) for target, counter in target_before_stop.items()}
     summary.outcome_labels = dict(outcome_labels)
+    summary.fee_adjusted_outcome_labels = dict(fee_adjusted_outcome_labels)
     return summary
 
 
@@ -326,7 +338,9 @@ def _update_candidate_bucket(bucket: CandidateOutcomeBucket, row: dict) -> None:
     label = str(row.get("outcome_label") or "")
     if label == "target_first":
         bucket.target_first += 1
-    elif label == "stop_first":
+    if row.get("fee_adjusted_target_before_stop") is True:
+        bucket.fee_adjusted_target_before_stop += 1
+    if label == "stop_first":
         bucket.stop_first += 1
     elif label == "timeout":
         bucket.timeout += 1
@@ -335,6 +349,7 @@ def _update_candidate_bucket(bucket: CandidateOutcomeBucket, row: dict) -> None:
     horizon = (row.get("mfe_mae_horizons") or {}).get("60") or {}
     bucket.total_mfe_60s_pct += float(horizon.get("mfe_pct") or row.get("max_favorable_move_pct") or 0.0)
     bucket.total_mae_60s_pct += float(horizon.get("mae_pct") or row.get("max_adverse_move_pct") or 0.0)
+    bucket.total_mfe_after_cost_bps += float(row.get("mfe_after_cost_bps") or 0.0)
 
 
 def _score_bucket(score: float) -> str:

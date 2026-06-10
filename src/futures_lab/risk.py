@@ -9,7 +9,13 @@ from futures_lab.models import Decision, DecisionAction, MarketState, PaperState
 class RiskEngine:
     settings: Settings
 
-    def evaluate(self, decision: Decision, market: MarketState, paper: PaperState) -> RiskVerdict:
+    def evaluate(
+        self,
+        decision: Decision,
+        market: MarketState,
+        paper: PaperState,
+        candidate_quality: dict | None = None,
+    ) -> RiskVerdict:
         blockers: list[str] = []
         if decision.action not in {DecisionAction.propose_long, DecisionAction.propose_short}:
             return RiskVerdict(allowed=False, reason="No trade proposal.", blockers=["decision is wait/close"])
@@ -47,6 +53,7 @@ class RiskEngine:
                     f"(cost={effective_cost.total_cost_bps:.2f}bps)"
                 )
             blockers.extend(self._paper_live_edge_blockers(decision, effective_cost.total_cost_bps))
+            blockers.extend(self._paper_live_rolling_quality_blockers(candidate_quality))
         if decision.stop_move_pct is not None and decision.leverage is not None:
             leveraged_stop_loss = decision.stop_move_pct * decision.leverage
             if leveraged_stop_loss > 0.60:
@@ -94,6 +101,20 @@ class RiskEngine:
                 f"{probability if probability is not None else 'missing'} < {self.settings.paper_live_min_tp_probability:.2f}"
             )
         return blockers
+
+    def _paper_live_rolling_quality_blockers(self, candidate_quality: dict | None) -> list[str]:
+        if not self.settings.paper_live_rolling_edge_monitor_enabled:
+            return []
+        if not candidate_quality or not candidate_quality.get("enabled"):
+            return []
+        if not candidate_quality.get("ready"):
+            return []
+        if not candidate_quality.get("block"):
+            return []
+        return [
+            "paper live rolling edge monitor blocked opens: "
+            f"{candidate_quality.get('reason') or 'accepted candidates are not outperforming rejected candidates'}"
+        ]
 
     def _selected_edge_candidate(self, decision: Decision) -> dict | None:
         edge_router = decision.evidence.get("edge_router") or {}

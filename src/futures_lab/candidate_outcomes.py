@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from statistics import mean
 
 from futures_lab.config import Settings
 from futures_lab.models import Decision, MarketState, utc_now
@@ -44,6 +45,7 @@ class CandidateOutcomeTracker:
     opened_count: int = 0
     closed_count: int = 0
     last_opened_at_by_key: dict[tuple[str, str, str], datetime] = field(default_factory=dict)
+    rolling_closed: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.horizons_seconds = sorted(set(_parse_ints(self.settings.candidate_outcome_horizons_seconds)))
@@ -136,6 +138,64 @@ class CandidateOutcomeTracker:
         self.episodes = []
         return closed
 
+    def live_edge_quality_snapshot(self) -> dict:
+        if not self.settings.paper_live_rolling_edge_monitor_enabled:
+            return {"enabled": False, "ready": False, "block": False}
+        accepted = [row for row in self.rolling_closed if row.get("accepted") is True]
+        rejected = [row for row in self.rolling_closed if row.get("accepted") is False]
+        accepted_count = len(accepted)
+        rejected_count = len(rejected)
+        ready = (
+            accepted_count >= self.settings.paper_live_rolling_min_accepted
+            and rejected_count >= self.settings.paper_live_rolling_min_rejected
+        )
+        snapshot = {
+            "enabled": True,
+            "ready": ready,
+            "block": False,
+            "accepted_count": accepted_count,
+            "rejected_count": rejected_count,
+            "window": len(self.rolling_closed),
+            "min_accepted": self.settings.paper_live_rolling_min_accepted,
+            "min_rejected": self.settings.paper_live_rolling_min_rejected,
+        }
+        if not ready:
+            return snapshot
+
+        accepted_target_rate = _target_before_stop_rate(accepted)
+        rejected_target_rate = _target_before_stop_rate(rejected)
+        accepted_mfe_after_cost_bps = _avg(accepted, "mfe_after_cost_bps")
+        rejected_mfe_after_cost_bps = _avg(rejected, "mfe_after_cost_bps")
+        target_rate_edge = accepted_target_rate - rejected_target_rate
+        mfe_edge_bps = accepted_mfe_after_cost_bps - rejected_mfe_after_cost_bps
+        target_rate_ok = target_rate_edge >= self.settings.paper_live_rolling_min_target_rate_edge
+        mfe_edge_ok = mfe_edge_bps >= self.settings.paper_live_rolling_min_mfe_edge_bps
+        block = not (target_rate_ok and mfe_edge_ok)
+        snapshot.update(
+            {
+                "block": block,
+                "accepted_cost_adjusted_target_before_stop_rate": accepted_target_rate,
+                "rejected_cost_adjusted_target_before_stop_rate": rejected_target_rate,
+                "target_rate_edge": target_rate_edge,
+                "min_target_rate_edge": self.settings.paper_live_rolling_min_target_rate_edge,
+                "accepted_avg_mfe_after_cost_bps": accepted_mfe_after_cost_bps,
+                "rejected_avg_mfe_after_cost_bps": rejected_mfe_after_cost_bps,
+                "mfe_edge_bps": mfe_edge_bps,
+                "min_mfe_edge_bps": self.settings.paper_live_rolling_min_mfe_edge_bps,
+                "target_rate_ok": target_rate_ok,
+                "mfe_edge_ok": mfe_edge_ok,
+            }
+        )
+        if block:
+            snapshot["reason"] = (
+                "accepted candidates are not outperforming rejected candidates: "
+                f"target_rate_edge={target_rate_edge:.3f} "
+                f"(min={self.settings.paper_live_rolling_min_target_rate_edge:.3f}), "
+                f"mfe_edge={mfe_edge_bps:.2f}bps "
+                f"(min={self.settings.paper_live_rolling_min_mfe_edge_bps:.2f}bps)"
+            )
+        return snapshot
+
     def _update_episode(self, episode: CandidateOutcomeEpisode, market: MarketState, current: datetime) -> None:
         if market.mid_price is None:
             return
@@ -174,6 +234,9 @@ class CandidateOutcomeTracker:
     def _close_event(self, episode: CandidateOutcomeEpisode, current: datetime, reason: str) -> dict:
         self.closed_count += 1
         row = self._event("close", episode)
+        mfe_bps = episode.max_favorable_move_pct * 10_000
+        mae_bps = episode.max_adverse_move_pct * 10_000
+        fee_adjusted_target_before_stop = _before(episode.first_cost_adjusted_target_seconds, episode.first_stop_seconds)
         row.update(
             {
                 "closed_at": current.isoformat(),
@@ -195,8 +258,14 @@ class CandidateOutcomeTracker:
                 },
                 "target_before_stop": self._target_before_stop(episode),
                 "outcome_label": self._outcome_label(episode),
+                "fee_adjusted_outcome_label": self._fee_adjusted_outcome_label(episode),
+                "fee_adjusted_target_before_stop": fee_adjusted_target_before_stop,
+                "mfe_bps": mfe_bps,
+                "mae_bps": mae_bps,
+                "mfe_after_cost_bps": mfe_bps - episode.expected_cost_bps,
             }
         )
+        self._record_rolling_outcome(row)
         return row
 
     def _event(self, event: str, episode: CandidateOutcomeEpisode) -> dict:
@@ -245,6 +314,30 @@ class CandidateOutcomeTracker:
             return "timeout"
         return min(events, key=lambda item: item[1])[0]
 
+    def _fee_adjusted_outcome_label(self, episode: CandidateOutcomeEpisode) -> str:
+        events = []
+        if episode.first_cost_adjusted_target_seconds is not None:
+            events.append(("fee_adjusted_target_first", episode.first_cost_adjusted_target_seconds))
+        if episode.first_stop_seconds is not None:
+            events.append(("stop_first", episode.first_stop_seconds))
+        if episode.first_soft_invalidation_seconds is not None:
+            events.append(("soft_invalidation_first", episode.first_soft_invalidation_seconds))
+        if not events:
+            return "timeout"
+        return min(events, key=lambda item: item[1])[0]
+
+    def _record_rolling_outcome(self, row: dict) -> None:
+        self.rolling_closed.append(
+            {
+                "accepted": row.get("accepted"),
+                "fee_adjusted_target_before_stop": row.get("fee_adjusted_target_before_stop"),
+                "mfe_after_cost_bps": row.get("mfe_after_cost_bps"),
+            }
+        )
+        window = max(1, self.settings.paper_live_rolling_window)
+        if len(self.rolling_closed) > window:
+            self.rolling_closed = self.rolling_closed[-window:]
+
 
 def _soft_invalidated(side: str, market: MarketState) -> bool:
     ofi = market.order_flow_imbalance_1s
@@ -279,3 +372,20 @@ def _parse_ints(raw: str) -> list[int]:
             continue
         values.append(int(float(part)))
     return values
+
+
+def _target_before_stop_rate(rows: list[dict]) -> float:
+    if not rows:
+        return 0.0
+    wins = sum(1 for row in rows if row.get("fee_adjusted_target_before_stop") is True)
+    return wins / len(rows)
+
+
+def _avg(rows: list[dict], key: str) -> float:
+    values = []
+    for row in rows:
+        try:
+            values.append(float(row[key]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return mean(values) if values else 0.0

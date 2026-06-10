@@ -179,6 +179,43 @@ def test_risk_allows_live_paper_when_selected_edge_is_strong_after_costs():
     assert verdict.allowed
 
 
+def test_risk_blocks_live_paper_when_rolling_candidate_quality_is_weak():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        PAPER_LIVE_MIN_TARGET_COST_MULTIPLE=2.5,
+        PAPER_LIVE_MIN_EXPECTED_EV_BPS=4.0,
+        PAPER_LIVE_MIN_SCORE=0.82,
+        PAPER_LIVE_MIN_TP_PROBABILITY=0.82,
+        PAPER_LIVE_ROLLING_EDGE_MONITOR_ENABLED=True,
+    )
+    decision = _edge_decision(
+        0.003,
+        {
+            "strategy": "taker_impulse_short",
+            "score": 0.88,
+            "p_hit_tp_before_sl": 0.88,
+            "expected_ev_bps": 6.0,
+        },
+    )
+    candidate_quality = {
+        "enabled": True,
+        "ready": True,
+        "block": True,
+        "reason": "accepted candidates are not outperforming rejected candidates",
+    }
+
+    verdict = RiskEngine(settings).evaluate(
+        decision,
+        _market(spread_bps=0.5),
+        PaperBroker(settings).state(),
+        candidate_quality=candidate_quality,
+    )
+
+    assert not verdict.allowed
+    assert "paper live rolling edge monitor blocked opens" in " ".join(verdict.blockers)
+
+
 def test_risk_blocks_after_daily_target_hit():
     settings = Settings(MIN_CONFIDENCE=0.70, DAILY_TARGET_USD=1)
     broker = PaperBroker(settings)
