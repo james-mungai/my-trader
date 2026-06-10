@@ -223,6 +223,20 @@ Acceptance:
 - [x] Tests cover allowing when accepted candidates clearly outperform rejected candidates.
 - [x] Tests cover risk blocker propagation into paper-live proposals.
 
+## Stage 12 - Baseline Microstructure Confirmation
+
+Goal: keep the old deterministic `stateful_momentum_baseline` from becoming the selected accepted/live route unless the local order-flow tape confirms the same side.
+
+- [x] Keep baseline candidates logged for accepted-vs-rejected research.
+- [x] Add same-side OFI, aggression, fair-value pressure, and depth/refill confirmation checks.
+- [x] Mark baseline candidates non-viable with `baseline_microstructure_not_confirmed` when confirmation is too weak.
+- [x] Leave primary microstructure families (`taker_impulse`, `liquidation_continuation`, maker shadow) independently selectable.
+
+Acceptance:
+
+- [x] Tests prove baseline remains logged while blocked without same-side microstructure.
+- [x] Tests prove baseline can still be selected when enough microstructure confirmation is present.
+
 ## Current Running Experiment
 
 - [ ] Analyze `futures-lab-recon_16h_eth_mfe_exit_20260527_091309` after completion.

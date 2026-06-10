@@ -217,6 +217,78 @@ def test_baseline_candidate_is_logged_with_router_candidates():
     assert result["candidate_count"] == 7
 
 
+def test_baseline_candidate_requires_same_side_microstructure_confirmation():
+    router = EdgeRouter(
+        Settings(
+            EDGE_ROUTER_MIN_EV_BPS=0.0,
+            EDGE_ROUTER_MIN_SCORE=0.70,
+            BASELINE_MICRO_MIN_CONFIRMATIONS=3,
+        )
+    )
+    baseline = BaselineCandidateInput(
+        side=Side.long,
+        score=0.90,
+        target_bps=30.0,
+        stop_bps=10.0,
+        reasons=["strong stateful baseline"],
+    )
+
+    result = router.evaluate(
+        _market(
+            higher_timeframe_bias_side="neutral",
+            order_flow_imbalance_1s=-0.95,
+            order_flow_imbalance_5s=-0.80,
+            taker_aggression_imbalance_5s=-0.78,
+            microprice_mid_bps=-0.40,
+            vamp_mid_bps=-0.35,
+            depth_imbalance_top5=-0.70,
+        ),
+        baseline=baseline,
+    )
+    candidate = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "stateful_momentum_baseline")
+
+    assert candidate["viable"] is False
+    assert "baseline_microstructure_not_confirmed" in candidate["blockers"]
+    assert result["selected"]["strategy"] != "stateful_momentum_baseline"
+
+
+def test_baseline_candidate_can_select_when_microstructure_confirms():
+    router = EdgeRouter(
+        Settings(
+            EDGE_ROUTER_MIN_EV_BPS=0.0,
+            EDGE_ROUTER_MIN_SCORE=0.70,
+            BASELINE_MICRO_MIN_CONFIRMATIONS=3,
+        )
+    )
+    baseline = BaselineCandidateInput(
+        side=Side.long,
+        score=0.95,
+        target_bps=30.0,
+        stop_bps=10.0,
+        reasons=["strong stateful baseline"],
+    )
+
+    result = router.evaluate(
+        _market(
+            higher_timeframe_bias_side="neutral",
+            order_flow_imbalance_1s=0.80,
+            order_flow_imbalance_5s=0.50,
+            taker_aggression_imbalance_5s=0.40,
+            microprice_mid_bps=0.20,
+            vamp_mid_bps=0.10,
+            depth_imbalance_top5=0.30,
+            bid_depth_refill_rate_5s=0.20,
+            ask_depth_evaporation_rate_5s=0.10,
+        ),
+        baseline=baseline,
+    )
+    candidate = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "stateful_momentum_baseline")
+
+    assert candidate["viable"] is True
+    assert candidate["strategy"] == result["selected"]["strategy"]
+    assert "baseline_microstructure_not_confirmed" not in candidate["blockers"]
+
+
 def test_maker_reversion_candidates_are_disabled_by_default():
     router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
 

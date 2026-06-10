@@ -110,7 +110,8 @@ class EdgeRouter:
         return candidates
 
     def _baseline_candidate(self, market: MarketState, baseline: BaselineCandidateInput) -> EdgeCandidate:
-        return self._build_candidate(
+        micro_gate = self._baseline_micro_confirmation(market, baseline.side)
+        candidate = self._build_candidate(
             market=market,
             strategy="stateful_momentum_baseline",
             family="baseline",
@@ -119,8 +120,16 @@ class EdgeRouter:
             stop_bps=baseline.stop_bps,
             max_hold_ms=baseline.max_hold_ms,
             score=baseline.score,
-            reasons=baseline.reasons or ["current deterministic strategy score"],
+            reasons=(baseline.reasons or ["current deterministic strategy score"])
+            + [
+                f"baseline_micro_confirmations={micro_gate['confirmations']}",
+                f"baseline_micro_required={micro_gate['required']}",
+                f"baseline_micro_passes={micro_gate['passes']}",
+            ],
         )
+        if not micro_gate["allowed"]:
+            return self._with_blockers(candidate, micro_gate["blockers"])
+        return candidate
 
     def _taker_impulse_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:
         signed = self._signed_features(market, side)
@@ -330,6 +339,55 @@ class EdgeRouter:
         if trade_lag_ms is not None and trade_lag_ms > self.settings.taker_impulse_max_event_lag_ms:
             blockers.append("impulse_trade_lagged")
         return blockers
+
+    def _baseline_micro_confirmation(self, market: MarketState, side: Side) -> dict:
+        if not self.settings.baseline_micro_confirmation_enabled:
+            return {
+                "allowed": True,
+                "confirmations": 0,
+                "required": 0,
+                "passes": [],
+                "blockers": [],
+            }
+        signed = self._signed_features(market, side)
+        passes = []
+        blockers = []
+        if signed["ofi_1s"] >= self.settings.baseline_micro_min_ofi_1s:
+            passes.append("ofi_1s")
+        else:
+            blockers.append("baseline_ofi_1s_not_confirmed")
+        if signed["ofi_5s"] >= self.settings.baseline_micro_min_ofi_5s:
+            passes.append("ofi_5s")
+        else:
+            blockers.append("baseline_ofi_5s_not_confirmed")
+        if signed["aggression_5s"] >= self.settings.baseline_micro_min_aggression_5s:
+            passes.append("aggression_5s")
+        else:
+            blockers.append("baseline_aggression_5s_not_confirmed")
+        if (
+            signed["microprice_mid_bps"] > self.settings.baseline_micro_min_pressure_bps
+            or signed["vamp_mid_bps"] > self.settings.baseline_micro_min_pressure_bps
+        ):
+            passes.append("fair_value_pressure")
+        else:
+            blockers.append("baseline_fair_value_not_confirmed")
+        if (
+            signed["depth_pressure"] >= self.settings.baseline_micro_min_depth_pressure
+            or signed["refill_pressure"] >= self.settings.baseline_micro_min_depth_pressure
+        ):
+            passes.append("depth_or_refill_pressure")
+        else:
+            blockers.append("baseline_depth_not_confirmed")
+
+        required = max(1, self.settings.baseline_micro_min_confirmations)
+        allowed = len(passes) >= required
+        return {
+            "allowed": allowed,
+            "confirmations": len(passes),
+            "required": required,
+            "passes": passes,
+            "blockers": [] if allowed else ["baseline_microstructure_not_confirmed"] + blockers,
+        }
 
     def _base_blockers(
         self,
