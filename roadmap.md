@@ -237,6 +237,21 @@ Acceptance:
 - [x] Tests prove baseline remains logged while blocked without same-side microstructure.
 - [x] Tests prove baseline can still be selected when enough microstructure confirmation is present.
 
+## Risk Branch - Range-Bound Support/Resistance Experiment
+
+Goal: isolate a higher-risk paper-only track that uses 15m/30m/1h support and resistance ranges to seek larger 0.5% moves with wider/no-normal-stop behavior, while preserving the main microstructure-first branch as the sane control.
+
+- [x] Create separate `codex/range-risk-track` worktree.
+- [x] Add `range_bound_support_resistance` strategy variant.
+- [x] Score longs near multi-timeframe support with room back toward resistance.
+- [x] Score shorts near multi-timeframe resistance with room back toward support.
+- [x] Add configurable 0.5% range-bound target, 200x leverage, and paper stop width.
+- [x] Keep this branch paper-only and run it beside the sane track for comparison.
+
+Acceptance:
+
+- [x] Tests cover long support entries, short resistance entries, and missing-context wait behavior.
+
 ## Current Running Experiment
 
 - [ ] Analyze `futures-lab-recon_16h_eth_mfe_exit_20260527_091309` after completion.

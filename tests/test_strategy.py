@@ -156,6 +156,117 @@ def test_liquidity_sweep_reversal_proposes_short_after_high_rejection():
     assert decision.evidence["strategy_variant"] == "liquidity_sweep_reversal"
 
 
+def _range_context(position: float, support_distance: float, resistance_distance: float) -> dict:
+    return {
+        "bias": {"side": "neutral", "strength": 0.05, "reason": "range test"},
+        "timeframes": {
+            "15m": {
+                "interval": "15m",
+                "range_position": position,
+                "range_pct": 0.014,
+                "trend_score": 0.08,
+                "structure": "range_support_test" if position < 0.5 else "range_resistance_test",
+                "support_distance_pct": support_distance,
+                "resistance_distance_pct": resistance_distance,
+            },
+            "30m": {
+                "interval": "30m",
+                "range_position": position,
+                "range_pct": 0.018,
+                "trend_score": -0.04,
+                "structure": "balanced",
+                "support_distance_pct": support_distance,
+                "resistance_distance_pct": resistance_distance,
+            },
+            "1h": {
+                "interval": "1h",
+                "range_position": position,
+                "range_pct": 0.022,
+                "trend_score": 0.02,
+                "structure": "balanced",
+                "support_distance_pct": support_distance,
+                "resistance_distance_pct": resistance_distance,
+            },
+        },
+    }
+
+
+def test_range_bound_strategy_proposes_long_near_multi_timeframe_support():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="range_bound_support_resistance",
+            RANGE_BOUND_TARGET_MOVE_PCT=0.005,
+            RANGE_BOUND_STOP_MOVE_PCT=0.0025,
+            RANGE_BOUND_LEVERAGE=200,
+        )
+    )
+
+    decision = strategy.decide(
+        _market(
+            symbol="ETHUSDT",
+            range_position_180s=0.08,
+            taker_buy_ratio_10s=0.64,
+            taker_buy_ratio_30s=0.58,
+            book_imbalance_top=0.22,
+            depth_imbalance_top5=0.30,
+            higher_timeframe_context=_range_context(0.10, support_distance=0.001, resistance_distance=0.012),
+            higher_timeframe_context_age_seconds=60,
+            higher_timeframe_bias_side="neutral",
+            higher_timeframe_bias_strength=0.05,
+        )
+    )
+
+    assert decision.action == DecisionAction.propose_long
+    assert decision.evidence["strategy_variant"] == "range_bound_support_resistance"
+    assert decision.evidence["trade_profile"] == "range_bound_support_resistance"
+    assert decision.target_move_pct == 0.005
+    assert decision.stop_move_pct == 0.0025
+    assert decision.leverage == 200
+    assert decision.evidence["edge_router"]["selected"]["target_bps"] == 50.0
+
+
+def test_range_bound_strategy_proposes_short_near_multi_timeframe_resistance():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="range_bound_support_resistance",
+            RANGE_BOUND_TARGET_MOVE_PCT=0.005,
+            RANGE_BOUND_STOP_MOVE_PCT=0.0025,
+            RANGE_BOUND_LEVERAGE=200,
+            MAX_SHORT_TAKER_BUY_RATIO_30S=0.60,
+        )
+    )
+
+    decision = strategy.decide(
+        _market(
+            symbol="ETHUSDT",
+            range_position_180s=0.94,
+            taker_buy_ratio_10s=0.22,
+            taker_buy_ratio_30s=0.34,
+            book_imbalance_top=-0.24,
+            depth_imbalance_top5=-0.35,
+            return_15s_pct=-0.0002,
+            higher_timeframe_context=_range_context(0.92, support_distance=0.013, resistance_distance=0.001),
+            higher_timeframe_context_age_seconds=60,
+            higher_timeframe_bias_side="neutral",
+            higher_timeframe_bias_strength=0.05,
+        )
+    )
+
+    assert decision.action == DecisionAction.propose_short
+    assert decision.evidence["trade_profile"] == "range_bound_support_resistance"
+    assert decision.take_profit_price < decision.entry_price
+
+
+def test_range_bound_strategy_waits_without_range_context():
+    strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="range_bound_support_resistance"))
+
+    decision = strategy.decide(_market(range_position_180s=0.08, taker_buy_ratio_10s=0.64))
+
+    assert decision.action == DecisionAction.wait
+
+
 def test_momentum_pullback_proposes_long_in_bullish_structure():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="momentum_pullback"))
 

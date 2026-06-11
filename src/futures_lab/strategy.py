@@ -78,7 +78,7 @@ class HitAndRunStrategy:
             evidence["stateful_momentum_filter"] = stateful_filter
         evidence["edge_router"] = self.edge_router.evaluate(
             market,
-            baseline=self._edge_router_baseline(long_score=long_score, short_score=short_score),
+            baseline=self._edge_router_baseline(variant=variant, long_score=long_score, short_score=short_score),
         )
 
         if long_score >= self._required_score("long", short_score, stateful_filter):
@@ -91,7 +91,7 @@ class HitAndRunStrategy:
                     reason=sequence_blocker,
                     evidence=evidence | {"strategy_variant": variant, "long_score": long_score, "short_score": short_score},
                 )
-            profile = self._trade_profile(mode, stateful_filter, "long")
+            profile = self._trade_profile(mode, stateful_filter, "long", variant=variant)
             return self._build_trade_decision(
                 market=market,
                 action=DecisionAction.propose_long,
@@ -120,7 +120,7 @@ class HitAndRunStrategy:
                     reason=sequence_blocker,
                     evidence=evidence | {"strategy_variant": variant, "long_score": long_score, "short_score": short_score},
                 )
-            profile = self._trade_profile(mode, stateful_filter, "short")
+            profile = self._trade_profile(mode, stateful_filter, "short", variant=variant)
             return self._build_trade_decision(
                 market=market,
                 action=DecisionAction.propose_short,
@@ -141,13 +141,19 @@ class HitAndRunStrategy:
     def sequence_summary(self) -> dict:
         return self.sequence.model_dump()
 
-    def _edge_router_baseline(self, long_score: float, short_score: float) -> BaselineCandidateInput:
+    def _edge_router_baseline(self, variant: str, long_score: float, short_score: float) -> BaselineCandidateInput:
         side = Side.long if long_score >= short_score else Side.short
+        if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
+            target_bps = self.settings.range_bound_target_move_pct * 10_000
+            stop_bps = self.settings.range_bound_stop_move_pct * 10_000
+        else:
+            target_bps = self.settings.fast_target_move_pct * 10_000
+            stop_bps = self.settings.fast_stop_move_pct * 10_000
         return BaselineCandidateInput(
             side=side,
             score=max(long_score, short_score),
-            target_bps=self.settings.fast_target_move_pct * 10_000,
-            stop_bps=self.settings.fast_stop_move_pct * 10_000,
+            target_bps=target_bps,
+            stop_bps=stop_bps,
             reasons=["current deterministic strategy score"],
         )
 
@@ -954,6 +960,15 @@ class HitAndRunStrategy:
                     "short": "Stateful momentum short: confirmed continuation after impulse, bounce, and rejection.",
                 },
             )
+        if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
+            return (
+                self._score_range_bound("long", market, buy_flow, book, depth),
+                self._score_range_bound("short", market, sell_flow, book, depth),
+                {
+                    "long": "Range-bound long: multi-timeframe support location with room back toward resistance.",
+                    "short": "Range-bound short: multi-timeframe resistance location with room back toward support.",
+                },
+            )
         return (
             self._score_long(market, buy_flow, book, depth, liquidation_bias),
             self._score_short(market, sell_flow, book, depth, liquidation_bias),
@@ -962,6 +977,85 @@ class HitAndRunStrategy:
                 "short": "Hit-and-run short: range-high location with positive taker-sell flow and supportive top-book pressure.",
             },
         )
+
+    def _score_range_bound(
+        self,
+        side: str,
+        market: MarketState,
+        flow: float,
+        book_imbalance: float,
+        depth_imbalance: float,
+    ) -> float:
+        frame_score = self._range_bound_context(side, market)
+        if not frame_score["ready"]:
+            return 0.0
+        local_range_position = market.range_position_180s if market.range_position_180s is not None else 0.5
+        local_edge = (
+            self._clamp((self.settings.range_bound_edge_zone - local_range_position) / self.settings.range_bound_edge_zone)
+            if side == "long"
+            else self._clamp((local_range_position - (1.0 - self.settings.range_bound_edge_zone)) / self.settings.range_bound_edge_zone)
+        )
+        pressure = (book_imbalance + depth_imbalance) / 2.0
+        pressure_alignment = self._clamp((pressure + 1.0) / 2.0) if side == "long" else self._clamp((-pressure + 1.0) / 2.0)
+        flow_alignment = self._clamp(flow)
+        trend_penalty = self._clamp(abs(frame_score["average_trend_score"]) / max(0.01, self.settings.range_bound_max_abs_trend_score))
+        score = (
+            0.34 * frame_score["edge_score"]
+            + 0.24 * frame_score["room_score"]
+            + 0.12 * frame_score["range_score"]
+            + 0.10 * local_edge
+            + self.settings.range_bound_flow_weight * flow_alignment
+            + self.settings.range_bound_pressure_weight * pressure_alignment
+            + 0.08 * (1.0 - trend_penalty)
+        )
+        return round(self._clamp(score), 4)
+
+    def _range_bound_context(self, side: str, market: MarketState) -> dict:
+        if self._higher_timeframe_context_stale(market):
+            return {"ready": False, "reason": "higher_timeframe_context_stale"}
+        if (
+            market.higher_timeframe_context_age_seconds is None
+            or market.higher_timeframe_context_age_seconds > self.settings.range_bound_max_context_age_seconds
+        ):
+            return {"ready": False, "reason": "range_context_stale"}
+        timeframes = market.higher_timeframe_context.get("timeframes", {}) if market.higher_timeframe_context else {}
+        requested = [item.strip() for item in self.settings.range_bound_timeframes.split(",") if item.strip()]
+        frames = [timeframes[name] for name in requested if name in timeframes]
+        if not frames:
+            return {"ready": False, "reason": "missing_range_timeframes"}
+        edge_scores = []
+        room_scores = []
+        range_scores = []
+        trend_scores = []
+        structures = []
+        for frame in frames:
+            range_position = float(frame.get("range_position") if frame.get("range_position") is not None else 0.5)
+            range_pct = float(frame.get("range_pct") or 0.0)
+            trend_score = float(frame.get("trend_score") or 0.0)
+            support_distance = float(frame.get("support_distance_pct") or 0.0)
+            resistance_distance = float(frame.get("resistance_distance_pct") or 0.0)
+            room = resistance_distance if side == "long" else support_distance
+            edge = (
+                self._clamp((self.settings.range_bound_edge_zone - range_position) / self.settings.range_bound_edge_zone)
+                if side == "long"
+                else self._clamp((range_position - (1.0 - self.settings.range_bound_edge_zone)) / self.settings.range_bound_edge_zone)
+            )
+            edge_scores.append(edge)
+            room_scores.append(self._clamp(room / max(0.000001, self.settings.range_bound_min_room_to_target_pct)))
+            range_scores.append(self._clamp(range_pct / max(0.000001, self.settings.range_bound_min_average_range_pct)))
+            trend_scores.append(trend_score)
+            structures.append(str(frame.get("structure") or "unknown"))
+        average = lambda values: sum(values) / len(values) if values else 0.0
+        return {
+            "ready": True,
+            "timeframes": requested,
+            "used": len(frames),
+            "edge_score": average(edge_scores),
+            "room_score": average(room_scores),
+            "range_score": average(range_scores),
+            "average_trend_score": average(trend_scores),
+            "structures": structures,
+        }
 
     def _score_long(
         self,
@@ -1654,7 +1748,21 @@ class HitAndRunStrategy:
             min_score = min(min_score, self.settings.counter_htf_bounce_min_score)
         return max(min_score, opposing_score + 0.04)
 
-    def _trade_profile(self, mode: TradeMode, stateful_filter: dict | None, side: str) -> TradeProfile:
+    def _trade_profile(
+        self,
+        mode: TradeMode,
+        stateful_filter: dict | None,
+        side: str,
+        variant: str = "",
+    ) -> TradeProfile:
+        if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
+            return TradeProfile(
+                name="range_bound_support_resistance",
+                mode=TradeMode.fast,
+                target_move_pct=self.settings.range_bound_target_move_pct,
+                stop_move_pct=self.settings.range_bound_stop_move_pct,
+                leverage=self.settings.range_bound_leverage,
+            )
         higher_timeframe_gate = (stateful_filter or {}).get("higher_timeframe_gate") or {}
         if (
             stateful_filter is not None
