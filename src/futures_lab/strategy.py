@@ -146,6 +146,24 @@ class HitAndRunStrategy:
         if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
             target_bps = self.settings.range_bound_target_move_pct * 10_000
             stop_bps = self.settings.range_bound_stop_move_pct * 10_000
+            max_hold_ms = max(60_000, int(self.settings.max_position_seconds or 21_600) * 1_000)
+            return BaselineCandidateInput(
+                side=side,
+                score=max(long_score, short_score),
+                target_bps=target_bps,
+                stop_bps=stop_bps,
+                max_hold_ms=max_hold_ms,
+                strategy="range_bound_support_resistance",
+                family="range_bound",
+                prefer_selected=True,
+                use_micro_confirmation=False,
+                reasons=[
+                    "range-bound support/resistance candidate",
+                    f"range_timeframes={self.settings.range_bound_timeframes}",
+                    f"target_bps={target_bps:.2f}",
+                    f"stop_bps={stop_bps:.2f}",
+                ],
+            )
         else:
             target_bps = self.settings.fast_target_move_pct * 10_000
             stop_bps = self.settings.fast_stop_move_pct * 10_000

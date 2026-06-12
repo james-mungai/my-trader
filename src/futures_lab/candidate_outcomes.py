@@ -68,7 +68,7 @@ class CandidateOutcomeTracker:
         if lag_ms is not None and lag_ms > self.settings.max_exchange_event_lag_ms:
             return []
         current = opened_at or market.last_received_at or decision.timestamp
-        selected_strategy = (edge_router.get("selected") or {}).get("strategy")
+        selected_strategy = (edge_router.get("selected_candidate") or edge_router.get("selected") or {}).get("strategy")
         opened = []
         for candidate in candidates:
             strategy = str(candidate.get("strategy") or "")

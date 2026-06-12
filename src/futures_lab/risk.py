@@ -53,7 +53,7 @@ class RiskEngine:
                     f"(cost={effective_cost.total_cost_bps:.2f}bps)"
                 )
             blockers.extend(self._paper_live_edge_blockers(decision, effective_cost.total_cost_bps))
-            blockers.extend(self._paper_live_rolling_quality_blockers(candidate_quality))
+            blockers.extend(self._paper_live_rolling_quality_blockers(decision, candidate_quality))
         if decision.stop_move_pct is not None and decision.leverage is not None:
             leveraged_stop_loss = decision.stop_move_pct * decision.leverage
             if leveraged_stop_loss > 0.60:
@@ -80,30 +80,38 @@ class RiskEngine:
         if selected is None:
             blockers.append("paper live edge gate missing selected candidate")
             return blockers
+        for blocker in selected.get("blockers") or []:
+            blockers.append(f"paper live selected candidate blocked: {blocker}")
 
         expected_ev_bps = self._float_value(selected.get("expected_ev_bps"))
-        if expected_ev_bps is None or expected_ev_bps < self.settings.paper_live_min_expected_ev_bps:
+        min_expected_ev_bps = self._paper_live_min_expected_ev_bps(selected)
+        if expected_ev_bps is None or expected_ev_bps < min_expected_ev_bps:
             blockers.append(
                 "paper live expected EV too low: "
                 f"{expected_ev_bps if expected_ev_bps is not None else 'missing'} "
-                f"< {self.settings.paper_live_min_expected_ev_bps:.2f}bps"
+                f"< {min_expected_ev_bps:.2f}bps"
             )
         score = self._float_value(selected.get("score"))
-        if score is None or score < self.settings.paper_live_min_score:
+        min_score = self._paper_live_min_score(selected)
+        if score is None or score < min_score:
             blockers.append(
                 "paper live score too low: "
-                f"{score if score is not None else 'missing'} < {self.settings.paper_live_min_score:.2f}"
+                f"{score if score is not None else 'missing'} < {min_score:.2f}"
             )
         probability = self._float_value(selected.get("p_hit_tp_before_sl"))
-        if probability is None or probability < self.settings.paper_live_min_tp_probability:
+        min_probability = self._paper_live_min_tp_probability(selected)
+        if probability is None or probability < min_probability:
             blockers.append(
                 "paper live TP probability too low: "
-                f"{probability if probability is not None else 'missing'} < {self.settings.paper_live_min_tp_probability:.2f}"
+                f"{probability if probability is not None else 'missing'} < {min_probability:.2f}"
             )
         return blockers
 
-    def _paper_live_rolling_quality_blockers(self, candidate_quality: dict | None) -> list[str]:
+    def _paper_live_rolling_quality_blockers(self, decision: Decision, candidate_quality: dict | None) -> list[str]:
         if not self.settings.paper_live_rolling_edge_monitor_enabled:
+            return []
+        selected = self._selected_edge_candidate(decision)
+        if self._is_range_bound_candidate(selected) and not self.settings.range_bound_rolling_edge_monitor_enabled:
             return []
         if not candidate_quality or not candidate_quality.get("enabled"):
             return []
@@ -120,8 +128,29 @@ class RiskEngine:
         edge_router = decision.evidence.get("edge_router") or {}
         if not isinstance(edge_router, dict):
             return None
-        selected = edge_router.get("selected") or edge_router.get("selected_candidate")
+        selected = edge_router.get("selected_candidate") or edge_router.get("selected")
         return selected if isinstance(selected, dict) else None
+
+    def _paper_live_min_expected_ev_bps(self, selected: dict) -> float:
+        if self._is_range_bound_candidate(selected):
+            return self.settings.range_bound_paper_live_min_expected_ev_bps
+        return self.settings.paper_live_min_expected_ev_bps
+
+    def _paper_live_min_score(self, selected: dict) -> float:
+        if self._is_range_bound_candidate(selected):
+            return self.settings.range_bound_paper_live_min_score
+        return self.settings.paper_live_min_score
+
+    def _paper_live_min_tp_probability(self, selected: dict) -> float:
+        if self._is_range_bound_candidate(selected):
+            return self.settings.range_bound_paper_live_min_tp_probability
+        return self.settings.paper_live_min_tp_probability
+
+    @staticmethod
+    def _is_range_bound_candidate(selected: dict | None) -> bool:
+        if not isinstance(selected, dict):
+            return False
+        return selected.get("family") == "range_bound" or selected.get("strategy") == "range_bound_support_resistance"
 
     @staticmethod
     def _float_value(value: object) -> float | None:

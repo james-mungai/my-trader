@@ -58,6 +58,10 @@ class BaselineCandidateInput:
     target_bps: float
     stop_bps: float
     max_hold_ms: int = 60_000
+    strategy: str = "stateful_momentum_baseline"
+    family: str = "baseline"
+    prefer_selected: bool = False
+    use_micro_confirmation: bool = True
     reasons: list[str] = field(default_factory=list)
 
 
@@ -82,10 +86,17 @@ class EdgeRouter:
             reverse=True,
         )
         selected = next((candidate for candidate in candidates_sorted if candidate.viable), None)
+        preferred = None
+        if baseline is not None and baseline.prefer_selected:
+            preferred = next((candidate for candidate in candidates_sorted if candidate.strategy == baseline.strategy), None)
+            if preferred is not None and preferred.viable:
+                selected = preferred
+        selected_candidate = preferred if preferred is not None else selected
         return {
             "enabled": True,
             "mode": mode,
             "selected": selected.model_dump() if selected else None,
+            "selected_candidate": selected_candidate.model_dump() if selected_candidate else None,
             "candidate_count": len(candidates_sorted),
             "viable_count": sum(1 for candidate in candidates_sorted if candidate.viable),
             "candidates": [candidate.model_dump() for candidate in candidates_sorted],
@@ -110,11 +121,15 @@ class EdgeRouter:
         return candidates
 
     def _baseline_candidate(self, market: MarketState, baseline: BaselineCandidateInput) -> EdgeCandidate:
-        micro_gate = self._baseline_micro_confirmation(market, baseline.side)
+        micro_gate = (
+            self._baseline_micro_confirmation(market, baseline.side)
+            if baseline.use_micro_confirmation
+            else {"allowed": True, "confirmations": 0, "required": 0, "passes": [], "blockers": []}
+        )
         candidate = self._build_candidate(
             market=market,
-            strategy="stateful_momentum_baseline",
-            family="baseline",
+            strategy=baseline.strategy,
+            family=baseline.family,
             side=baseline.side,
             target_bps=baseline.target_bps,
             stop_bps=baseline.stop_bps,

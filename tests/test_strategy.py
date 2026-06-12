@@ -224,6 +224,9 @@ def test_range_bound_strategy_proposes_long_near_multi_timeframe_support():
     assert decision.stop_move_pct == 0.0025
     assert decision.leverage == 200
     assert decision.evidence["edge_router"]["selected"]["target_bps"] == 50.0
+    assert decision.evidence["edge_router"]["selected_candidate"]["strategy"] == "range_bound_support_resistance"
+    assert decision.evidence["edge_router"]["selected_candidate"]["family"] == "range_bound"
+    assert decision.evidence["edge_router"]["selected_candidate"]["max_hold_ms"] == 21_600_000
 
 
 def test_range_bound_strategy_proposes_short_near_multi_timeframe_resistance():
@@ -256,6 +259,7 @@ def test_range_bound_strategy_proposes_short_near_multi_timeframe_resistance():
 
     assert decision.action == DecisionAction.propose_short
     assert decision.evidence["trade_profile"] == "range_bound_support_resistance"
+    assert decision.evidence["edge_router"]["selected_candidate"]["strategy"] == "range_bound_support_resistance"
     assert decision.take_profit_price < decision.entry_price
 
 

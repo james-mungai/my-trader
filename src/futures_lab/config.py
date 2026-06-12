@@ -80,6 +80,19 @@ class Settings(BaseSettings):
     range_bound_max_context_age_seconds: float = Field(default=900.0, alias="RANGE_BOUND_MAX_CONTEXT_AGE_SECONDS")
     range_bound_flow_weight: float = Field(default=0.12, alias="RANGE_BOUND_FLOW_WEIGHT")
     range_bound_pressure_weight: float = Field(default=0.10, alias="RANGE_BOUND_PRESSURE_WEIGHT")
+    range_bound_paper_live_min_expected_ev_bps: float = Field(
+        default=4.0,
+        alias="RANGE_BOUND_PAPER_LIVE_MIN_EXPECTED_EV_BPS",
+    )
+    range_bound_paper_live_min_score: float = Field(default=0.70, alias="RANGE_BOUND_PAPER_LIVE_MIN_SCORE")
+    range_bound_paper_live_min_tp_probability: float = Field(
+        default=0.70,
+        alias="RANGE_BOUND_PAPER_LIVE_MIN_TP_PROBABILITY",
+    )
+    range_bound_rolling_edge_monitor_enabled: bool = Field(
+        default=False,
+        alias="RANGE_BOUND_ROLLING_EDGE_MONITOR_ENABLED",
+    )
     stateful_target_feasibility_fraction: float = Field(default=0.60, alias="STATEFUL_TARGET_FEASIBILITY_FRACTION")
     stateful_adaptive_target_fraction: float = Field(default=0.50, alias="STATEFUL_ADAPTIVE_TARGET_FRACTION")
     stateful_adaptive_min_sequence_confidence: float = Field(default=0.93, alias="STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE")
