@@ -41,6 +41,40 @@ def _market(price: float = 100.0, **overrides) -> MarketState:
     return MarketState(**base)
 
 
+def _range_context(position: float, support_distance: float, resistance_distance: float) -> dict:
+    return {
+        "timeframes": {
+            "15m": {
+                "interval": "15m",
+                "range_position": position,
+                "range_pct": 0.018,
+                "trend_score": 0.03,
+                "structure": "balanced",
+                "support_distance_pct": support_distance,
+                "resistance_distance_pct": resistance_distance,
+            },
+            "30m": {
+                "interval": "30m",
+                "range_position": position,
+                "range_pct": 0.026,
+                "trend_score": 0.02,
+                "structure": "balanced",
+                "support_distance_pct": support_distance,
+                "resistance_distance_pct": resistance_distance,
+            },
+            "1h": {
+                "interval": "1h",
+                "range_position": position,
+                "range_pct": 0.031,
+                "trend_score": 0.01,
+                "structure": "balanced",
+                "support_distance_pct": support_distance,
+                "resistance_distance_pct": resistance_distance,
+            },
+        }
+    }
+
+
 def test_risk_blocks_non_trade_decision():
     settings = Settings()
     broker = PaperBroker(settings)
@@ -104,6 +138,49 @@ def test_risk_allows_larger_target_that_clears_effective_costs():
     verdict = RiskEngine(settings).evaluate(decision, market, broker.state())
 
     assert verdict.allowed
+
+
+def test_range_bound_uses_structural_invalidation_instead_of_micro_stop():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        STRATEGY_VARIANT="range_bound_support_resistance",
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        ENABLE_PRICE_STOP=False,
+        EMERGENCY_MAX_ADVERSE_MOVE_PCT=0.0045,
+        RANGE_BOUND_LEVERAGE=200,
+        RANGE_BOUND_MAX_ACCOUNT_DRAWDOWN_FRACTION=0.65,
+        RANGE_BOUND_MIN_LEVERAGE=40,
+    )
+    market = _market(
+        100.0,
+        symbol="ETHUSDT",
+        range_position_180s=0.08,
+        taker_buy_ratio_10s=0.64,
+        taker_buy_ratio_30s=0.58,
+        book_imbalance_top=0.22,
+        depth_imbalance_top5=0.30,
+        higher_timeframe_context=_range_context(0.10, support_distance=0.030, resistance_distance=0.012),
+        higher_timeframe_context_age_seconds=60,
+        higher_timeframe_bias_side="neutral",
+        higher_timeframe_bias_strength=0.05,
+    )
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    verdict = RiskEngine(settings).evaluate(decision, market, broker.state())
+
+    assert verdict.allowed
+    position = broker.open_from_decision(decision)
+    assert position is not None
+    assert position.structural_adverse_move_pct == pytest.approx(0.0305)
+    assert position.leverage < 200
+
+    # The old 0.45% emergency line should not close a range trade that is still inside the HTF box.
+    assert broker.mark(_market(99.0, higher_timeframe_context=market.higher_timeframe_context)) is None
+
+    trade = broker.mark(_market(96.8, higher_timeframe_context=market.higher_timeframe_context))
+
+    assert trade is not None
+    assert trade.exit_reason == "structural_invalidation"
 
 
 def _edge_decision(target_move_pct: float, selected: dict) -> Decision:

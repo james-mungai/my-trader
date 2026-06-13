@@ -62,6 +62,7 @@ class BaselineCandidateInput:
     family: str = "baseline"
     prefer_selected: bool = False
     use_micro_confirmation: bool = True
+    ev_loss_bps: float | None = None
     reasons: list[str] = field(default_factory=list)
 
 
@@ -141,6 +142,7 @@ class EdgeRouter:
                 f"baseline_micro_required={micro_gate['required']}",
                 f"baseline_micro_passes={micro_gate['passes']}",
             ],
+            ev_loss_bps=baseline.ev_loss_bps,
         )
         if not micro_gate["allowed"]:
             return self._with_blockers(candidate, micro_gate["blockers"])
@@ -299,10 +301,12 @@ class EdgeRouter:
         reasons: list[str],
         cost: EffectiveCost | None = None,
         exit_plan: dict | None = None,
+        ev_loss_bps: float | None = None,
     ) -> EdgeCandidate:
         cost = cost or estimate_effective_cost(self.settings, market)
         p_hit = self._bounded(score)
-        ev = p_hit * target_bps - (1.0 - p_hit) * stop_bps - cost.total_cost_bps
+        loss_bps = stop_bps if ev_loss_bps is None else ev_loss_bps
+        ev = p_hit * target_bps - (1.0 - p_hit) * loss_bps - cost.total_cost_bps
         blockers = self._base_blockers(market, side, target_bps, cost.total_cost_bps, score, ev)
         return EdgeCandidate(
             strategy=strategy,

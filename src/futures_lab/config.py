@@ -93,6 +93,23 @@ class Settings(BaseSettings):
         default=False,
         alias="RANGE_BOUND_ROLLING_EDGE_MONITOR_ENABLED",
     )
+    range_bound_structural_risk_enabled: bool = Field(default=True, alias="RANGE_BOUND_STRUCTURAL_RISK_ENABLED")
+    range_bound_structural_exit_enabled: bool = Field(default=True, alias="RANGE_BOUND_STRUCTURAL_EXIT_ENABLED")
+    range_bound_structural_buffer_pct: float = Field(default=0.0005, alias="RANGE_BOUND_STRUCTURAL_BUFFER_PCT")
+    range_bound_max_structural_adverse_move_pct: float = Field(
+        default=0.035,
+        alias="RANGE_BOUND_MAX_STRUCTURAL_ADVERSE_MOVE_PCT",
+    )
+    range_bound_max_account_drawdown_fraction: float = Field(
+        default=0.65,
+        alias="RANGE_BOUND_MAX_ACCOUNT_DRAWDOWN_FRACTION",
+    )
+    range_bound_dynamic_leverage_enabled: bool = Field(default=True, alias="RANGE_BOUND_DYNAMIC_LEVERAGE_ENABLED")
+    range_bound_min_leverage: int = Field(default=40, alias="RANGE_BOUND_MIN_LEVERAGE")
+    range_bound_expected_loss_fraction_of_structural: float = Field(
+        default=0.25,
+        alias="RANGE_BOUND_EXPECTED_LOSS_FRACTION_OF_STRUCTURAL",
+    )
     stateful_target_feasibility_fraction: float = Field(default=0.60, alias="STATEFUL_TARGET_FEASIBILITY_FRACTION")
     stateful_adaptive_target_fraction: float = Field(default=0.50, alias="STATEFUL_ADAPTIVE_TARGET_FRACTION")
     stateful_adaptive_min_sequence_confidence: float = Field(default=0.93, alias="STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE")

@@ -69,6 +69,7 @@ class PaperBroker:
         actual_opened_at = opened_at or utc_now()
         trade_profile = str(decision.evidence.get("trade_profile") or decision.mode.value)
         exit_policy = self._exit_policy_for_profile(trade_profile)
+        structural_risk = self._structural_risk_for_decision(decision, side)
         self.open_position = PaperPosition(
             symbol=decision.symbol,
             side=side,
@@ -82,6 +83,8 @@ class PaperBroker:
             leverage=decision.leverage,
             take_profit_price=decision.take_profit_price,
             stop_loss_price=decision.stop_loss_price,
+            structural_invalidation_price=structural_risk.get("invalidation_price"),
+            structural_adverse_move_pct=structural_risk.get("structural_adverse_move_pct"),
             opened_at=actual_opened_at,
             confidence=decision.confidence,
         )
@@ -113,14 +116,18 @@ class PaperBroker:
                 return self.close(market.mid_price, "take_profit", closed_at=current)
             if self.settings.enable_price_stop and market.mid_price <= pos.stop_loss_price:
                 return self.close(market.mid_price, "stop_loss", closed_at=current)
+            if self._should_close_structural_invalidation(pos, market.mid_price):
+                return self.close(market.mid_price, "structural_invalidation", closed_at=current)
         else:
             if market.mid_price <= pos.take_profit_price:
                 return self.close(market.mid_price, "take_profit", closed_at=current)
             if self.settings.enable_price_stop and market.mid_price >= pos.stop_loss_price:
                 return self.close(market.mid_price, "stop_loss", closed_at=current)
+            if self._should_close_structural_invalidation(pos, market.mid_price):
+                return self.close(market.mid_price, "structural_invalidation", closed_at=current)
         if self._should_close_mfe_trailing(pos, market):
             return self.close(market.mid_price, "mfe_trailing_stop", closed_at=current)
-        if pos.max_adverse_move_pct <= -abs(self.settings.emergency_max_adverse_move_pct):
+        if pos.max_adverse_move_pct <= -abs(self._emergency_adverse_limit(pos)):
             return self.close(market.mid_price, "emergency_adverse_move", closed_at=current)
         if self._should_close_fast_failure(pos, current):
             return self.close(market.mid_price, "fast_failure", closed_at=current)
@@ -133,6 +140,32 @@ class PaperBroker:
         move = ((price - pos.entry_price) / pos.entry_price) * direction
         pos.max_favorable_move_pct = max(pos.max_favorable_move_pct, move)
         pos.max_adverse_move_pct = min(pos.max_adverse_move_pct, move)
+
+    def _structural_risk_for_decision(self, decision: Decision, side: Side) -> dict:
+        risk_by_side = decision.evidence.get("range_bound_structural_risk")
+        if not isinstance(risk_by_side, dict):
+            return {}
+        risk = risk_by_side.get(side.value)
+        return risk if isinstance(risk, dict) else {}
+
+    def _should_close_structural_invalidation(self, pos: PaperPosition, price: float) -> bool:
+        if not self.settings.range_bound_structural_exit_enabled:
+            return False
+        if pos.trade_profile != "range_bound_support_resistance" or pos.structural_invalidation_price is None:
+            return False
+        if pos.side == Side.long:
+            return price <= pos.structural_invalidation_price
+        return price >= pos.structural_invalidation_price
+
+    def _emergency_adverse_limit(self, pos: PaperPosition) -> float:
+        limit = abs(self.settings.emergency_max_adverse_move_pct)
+        if (
+            pos.trade_profile == "range_bound_support_resistance"
+            and pos.structural_adverse_move_pct is not None
+            and self.settings.range_bound_structural_risk_enabled
+        ):
+            return max(limit, abs(pos.structural_adverse_move_pct))
+        return limit
 
     def _should_close_fast_failure(self, pos: PaperPosition, current: datetime) -> bool:
         if not self.settings.enable_fast_failure_exit:

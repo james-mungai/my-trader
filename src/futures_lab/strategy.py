@@ -76,9 +76,19 @@ class HitAndRunStrategy:
         stateful_filter = self._stateful_momentum_filter(variant, sequence_snapshot, market, long_score, short_score)
         if stateful_filter is not None:
             evidence["stateful_momentum_filter"] = stateful_filter
+        if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
+            evidence["range_bound_structural_risk"] = {
+                "long": self._range_bound_structural_risk("long", market),
+                "short": self._range_bound_structural_risk("short", market),
+            }
         evidence["edge_router"] = self.edge_router.evaluate(
             market,
-            baseline=self._edge_router_baseline(variant=variant, long_score=long_score, short_score=short_score),
+            baseline=self._edge_router_baseline(
+                variant=variant,
+                market=market,
+                long_score=long_score,
+                short_score=short_score,
+            ),
         )
 
         if long_score >= self._required_score("long", short_score, stateful_filter):
@@ -91,7 +101,7 @@ class HitAndRunStrategy:
                     reason=sequence_blocker,
                     evidence=evidence | {"strategy_variant": variant, "long_score": long_score, "short_score": short_score},
                 )
-            profile = self._trade_profile(mode, stateful_filter, "long", variant=variant)
+            profile = self._trade_profile(mode, stateful_filter, "long", variant=variant, market=market)
             return self._build_trade_decision(
                 market=market,
                 action=DecisionAction.propose_long,
@@ -120,7 +130,7 @@ class HitAndRunStrategy:
                     reason=sequence_blocker,
                     evidence=evidence | {"strategy_variant": variant, "long_score": long_score, "short_score": short_score},
                 )
-            profile = self._trade_profile(mode, stateful_filter, "short", variant=variant)
+            profile = self._trade_profile(mode, stateful_filter, "short", variant=variant, market=market)
             return self._build_trade_decision(
                 market=market,
                 action=DecisionAction.propose_short,
@@ -141,11 +151,22 @@ class HitAndRunStrategy:
     def sequence_summary(self) -> dict:
         return self.sequence.model_dump()
 
-    def _edge_router_baseline(self, variant: str, long_score: float, short_score: float) -> BaselineCandidateInput:
+    def _edge_router_baseline(
+        self,
+        variant: str,
+        market: MarketState,
+        long_score: float,
+        short_score: float,
+    ) -> BaselineCandidateInput:
         side = Side.long if long_score >= short_score else Side.short
         if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
+            structural = self._range_bound_structural_risk(side.value, market)
             target_bps = self.settings.range_bound_target_move_pct * 10_000
-            stop_bps = self.settings.range_bound_stop_move_pct * 10_000
+            stop_bps = float(structural.get("structural_adverse_move_pct") or self.settings.range_bound_stop_move_pct) * 10_000
+            ev_loss_bps = max(
+                self.settings.range_bound_stop_move_pct * 10_000,
+                stop_bps * self.settings.range_bound_expected_loss_fraction_of_structural,
+            )
             max_hold_ms = max(60_000, int(self.settings.max_position_seconds or 21_600) * 1_000)
             return BaselineCandidateInput(
                 side=side,
@@ -157,11 +178,15 @@ class HitAndRunStrategy:
                 family="range_bound",
                 prefer_selected=True,
                 use_micro_confirmation=False,
+                ev_loss_bps=ev_loss_bps,
                 reasons=[
                     "range-bound support/resistance candidate",
                     f"range_timeframes={self.settings.range_bound_timeframes}",
                     f"target_bps={target_bps:.2f}",
                     f"stop_bps={stop_bps:.2f}",
+                    f"ev_loss_bps={ev_loss_bps:.2f}",
+                    f"structural_allowed={structural.get('allowed')}",
+                    f"structural_account_drawdown={structural.get('account_drawdown_fraction')}",
                 ],
             )
         else:
@@ -1075,6 +1100,92 @@ class HitAndRunStrategy:
             "structures": structures,
         }
 
+    def _range_bound_structural_risk(self, side: str, market: MarketState) -> dict:
+        if not self.settings.range_bound_structural_risk_enabled:
+            return {
+                "enabled": False,
+                "allowed": True,
+                "structural_adverse_move_pct": self.settings.range_bound_stop_move_pct,
+                "leverage": self.settings.range_bound_leverage,
+                "account_drawdown_fraction": self.settings.stake_fraction
+                * self.settings.range_bound_leverage
+                * self.settings.range_bound_stop_move_pct,
+                "blockers": [],
+            }
+        if market.mid_price is None:
+            return {"enabled": True, "allowed": False, "blockers": ["missing_mid_price"]}
+        if (
+            market.higher_timeframe_context_age_seconds is None
+            or market.higher_timeframe_context_age_seconds > self.settings.range_bound_max_context_age_seconds
+        ):
+            return {"enabled": True, "allowed": False, "blockers": ["range_context_stale"]}
+        timeframes = market.higher_timeframe_context.get("timeframes", {}) if market.higher_timeframe_context else {}
+        requested = [item.strip() for item in self.settings.range_bound_timeframes.split(",") if item.strip()]
+        frames = [(name, timeframes[name]) for name in requested if name in timeframes]
+        if not frames:
+            return {"enabled": True, "allowed": False, "blockers": ["missing_range_timeframes"]}
+
+        protective_key = "support_distance_pct" if side == "long" else "resistance_distance_pct"
+        opposite_key = "resistance_distance_pct" if side == "long" else "support_distance_pct"
+        frame_rows = []
+        protective_distances = []
+        opposite_rooms = []
+        for name, frame in frames:
+            protective_distance = max(0.0, float(frame.get(protective_key) or 0.0))
+            opposite_room = max(0.0, float(frame.get(opposite_key) or 0.0))
+            protective_distances.append(protective_distance)
+            opposite_rooms.append(opposite_room)
+            frame_rows.append(
+                {
+                    "timeframe": name,
+                    "protective_distance_pct": protective_distance,
+                    "opposite_room_pct": opposite_room,
+                    "range_pct": float(frame.get("range_pct") or 0.0),
+                    "range_position": float(frame.get("range_position") if frame.get("range_position") is not None else 0.5),
+                    "structure": str(frame.get("structure") or "unknown"),
+                }
+            )
+
+        structural_adverse = max(self.settings.range_bound_stop_move_pct, max(protective_distances) + self.settings.range_bound_structural_buffer_pct)
+        target_room = min(opposite_rooms) if opposite_rooms else 0.0
+        raw_leverage = max(1, int(self.settings.range_bound_leverage))
+        adjusted_leverage = raw_leverage
+        if self.settings.range_bound_dynamic_leverage_enabled and structural_adverse > 0:
+            max_leverage = int(
+                self.settings.range_bound_max_account_drawdown_fraction
+                / max(0.000001, self.settings.stake_fraction * structural_adverse)
+            )
+            adjusted_leverage = min(raw_leverage, max(1, max_leverage))
+        account_drawdown = self.settings.stake_fraction * adjusted_leverage * structural_adverse
+        direction = 1 if side == "long" else -1
+        invalidation_price = market.mid_price * (1 - structural_adverse) if side == "long" else market.mid_price * (1 + structural_adverse)
+        blockers = []
+        if structural_adverse > self.settings.range_bound_max_structural_adverse_move_pct:
+            blockers.append("range_structural_distance_too_wide")
+        if adjusted_leverage < self.settings.range_bound_min_leverage:
+            blockers.append("range_dynamic_leverage_below_min")
+        if account_drawdown > self.settings.range_bound_max_account_drawdown_fraction:
+            blockers.append("range_account_drawdown_too_high")
+        if target_room < self.settings.range_bound_target_move_pct:
+            blockers.append("range_target_room_too_small")
+        return {
+            "enabled": True,
+            "allowed": not blockers,
+            "side": side,
+            "frames": frame_rows,
+            "structural_adverse_move_pct": round(structural_adverse, 6),
+            "structural_adverse_bps": round(structural_adverse * 10_000, 3),
+            "target_room_pct": round(target_room, 6),
+            "raw_leverage": raw_leverage,
+            "leverage": adjusted_leverage,
+            "dynamic_leverage_applied": adjusted_leverage != raw_leverage,
+            "account_drawdown_fraction": round(account_drawdown, 6),
+            "max_account_drawdown_fraction": self.settings.range_bound_max_account_drawdown_fraction,
+            "invalidation_price": invalidation_price,
+            "invalidation_direction": "below_support" if direction == 1 else "above_resistance",
+            "blockers": blockers,
+        }
+
     def _score_long(
         self,
         market: MarketState,
@@ -1772,14 +1883,16 @@ class HitAndRunStrategy:
         stateful_filter: dict | None,
         side: str,
         variant: str = "",
+        market: MarketState | None = None,
     ) -> TradeProfile:
         if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
+            structural = self._range_bound_structural_risk(side, market) if market is not None else {}
             return TradeProfile(
                 name="range_bound_support_resistance",
                 mode=TradeMode.fast,
                 target_move_pct=self.settings.range_bound_target_move_pct,
-                stop_move_pct=self.settings.range_bound_stop_move_pct,
-                leverage=self.settings.range_bound_leverage,
+                stop_move_pct=float(structural.get("structural_adverse_move_pct") or self.settings.range_bound_stop_move_pct),
+                leverage=int(structural.get("leverage") or self.settings.range_bound_leverage),
             )
         higher_timeframe_gate = (stateful_filter or {}).get("higher_timeframe_gate") or {}
         if (

@@ -189,6 +189,8 @@ class PaperPosition(BaseModel):
     leverage: int
     take_profit_price: float
     stop_loss_price: float
+    structural_invalidation_price: float | None = None
+    structural_adverse_move_pct: float | None = None
     opened_at: datetime
     confidence: float
     max_favorable_move_pct: float = 0.0

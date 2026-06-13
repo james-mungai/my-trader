@@ -54,7 +54,10 @@ class RiskEngine:
                 )
             blockers.extend(self._paper_live_edge_blockers(decision, effective_cost.total_cost_bps))
             blockers.extend(self._paper_live_rolling_quality_blockers(decision, candidate_quality))
-        if decision.stop_move_pct is not None and decision.leverage is not None:
+        selected = self._selected_edge_candidate(decision)
+        if self._is_range_bound_candidate(selected):
+            blockers.extend(self._range_bound_structural_risk_blockers(decision, selected))
+        elif decision.stop_move_pct is not None and decision.leverage is not None:
             leveraged_stop_loss = decision.stop_move_pct * decision.leverage
             if leveraged_stop_loss > 0.60:
                 blockers.append(f"leveraged stop risks {leveraged_stop_loss:.1%} of stake")
@@ -130,6 +133,33 @@ class RiskEngine:
             return None
         selected = edge_router.get("selected_candidate") or edge_router.get("selected")
         return selected if isinstance(selected, dict) else None
+
+    def _range_bound_structural_risk_blockers(self, decision: Decision, selected: dict | None) -> list[str]:
+        if not self.settings.range_bound_structural_risk_enabled:
+            return []
+        side = (selected or {}).get("side")
+        risk_by_side = decision.evidence.get("range_bound_structural_risk")
+        risk = risk_by_side.get(side) if isinstance(risk_by_side, dict) else None
+        if not isinstance(risk, dict):
+            return ["range structural risk missing"]
+        blockers = [f"range structural risk blocked: {item}" for item in risk.get("blockers") or []]
+        structural_adverse = self._float_value(risk.get("structural_adverse_move_pct"))
+        account_drawdown = self._float_value(risk.get("account_drawdown_fraction"))
+        if structural_adverse is None:
+            blockers.append("range structural adverse move missing")
+        elif structural_adverse > self.settings.range_bound_max_structural_adverse_move_pct:
+            blockers.append(
+                "range structural adverse move too wide: "
+                f"{structural_adverse:.2%} > {self.settings.range_bound_max_structural_adverse_move_pct:.2%}"
+            )
+        if account_drawdown is None:
+            blockers.append("range account drawdown missing")
+        elif account_drawdown > self.settings.range_bound_max_account_drawdown_fraction:
+            blockers.append(
+                "range account drawdown too high: "
+                f"{account_drawdown:.1%} > {self.settings.range_bound_max_account_drawdown_fraction:.1%}"
+            )
+        return blockers
 
     def _paper_live_min_expected_ev_bps(self, selected: dict) -> float:
         if self._is_range_bound_candidate(selected):

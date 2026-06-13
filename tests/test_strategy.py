@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from futures_lab.config import Settings
 from futures_lab.models import DecisionAction, MarketState, Regime
 from futures_lab.strategy import HitAndRunStrategy
@@ -261,6 +263,40 @@ def test_range_bound_strategy_proposes_short_near_multi_timeframe_resistance():
     assert decision.evidence["trade_profile"] == "range_bound_support_resistance"
     assert decision.evidence["edge_router"]["selected_candidate"]["strategy"] == "range_bound_support_resistance"
     assert decision.take_profit_price < decision.entry_price
+
+
+def test_range_bound_strategy_scales_leverage_to_structural_box():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="range_bound_support_resistance",
+            RANGE_BOUND_LEVERAGE=200,
+            RANGE_BOUND_MIN_LEVERAGE=40,
+            RANGE_BOUND_MAX_ACCOUNT_DRAWDOWN_FRACTION=0.65,
+        )
+    )
+
+    decision = strategy.decide(
+        _market(
+            symbol="ETHUSDT",
+            range_position_180s=0.08,
+            taker_buy_ratio_10s=0.64,
+            taker_buy_ratio_30s=0.58,
+            book_imbalance_top=0.22,
+            depth_imbalance_top5=0.30,
+            higher_timeframe_context=_range_context(0.10, support_distance=0.030, resistance_distance=0.012),
+            higher_timeframe_context_age_seconds=60,
+            higher_timeframe_bias_side="neutral",
+            higher_timeframe_bias_strength=0.05,
+        )
+    )
+
+    risk = decision.evidence["range_bound_structural_risk"]["long"]
+    assert decision.action == DecisionAction.propose_long
+    assert decision.stop_move_pct == pytest.approx(0.0305)
+    assert decision.leverage < 200
+    assert risk["dynamic_leverage_applied"] is True
+    assert risk["account_drawdown_fraction"] <= 0.65
 
 
 def test_range_bound_strategy_waits_without_range_context():
