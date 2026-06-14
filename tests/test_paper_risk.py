@@ -106,6 +106,24 @@ def test_risk_allows_larger_target_that_clears_effective_costs():
     assert verdict.allowed
 
 
+def test_paper_broker_closes_open_position_at_session_end():
+    settings = Settings(MIN_CONFIDENCE=0.70)
+    decision = HitAndRunStrategy(settings).decide(_market())
+    broker = PaperBroker(settings)
+    broker.open_from_decision(decision, opened_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    closed = broker.close_open_position(
+        _market(100.8, last_received_at=datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)),
+        reason="session_end",
+    )
+
+    assert closed is not None
+    assert closed.exit_reason == "session_end"
+    assert closed.closed_at == datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    assert broker.open_position is None
+    assert broker.trades_today == 1
+
+
 def _edge_decision(target_move_pct: float, selected: dict) -> Decision:
     price = 100.0
     return Decision(
