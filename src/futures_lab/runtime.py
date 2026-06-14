@@ -79,6 +79,10 @@ class TradingRuntime:
                 pass
         await self.recorder.stop()
         await self.context.stop()
+        closed = self.paper.close_open_position(self.latest_market, reason="session_end")
+        if closed is not None:
+            self.audit.write("paper_close", closed.model_dump())
+            self.recon_log.write_paper_trade(closed)
         for event in self.shadow.close_all(self.latest_market, reason="session_end"):
             self.audit.write("shadow_trade", event)
             self.recon_log.write_shadow_trade(event)
@@ -146,6 +150,8 @@ class TradingRuntime:
                             "entry_price": opened.entry_price,
                             "take_profit_price": opened.take_profit_price,
                             "stop_loss_price": opened.stop_loss_price,
+                            "structural_invalidation_price": opened.structural_invalidation_price,
+                            "structural_adverse_move_pct": opened.structural_adverse_move_pct,
                             "confidence": opened.confidence,
                             "leverage": opened.leverage,
                             "notional_usd": opened.notional_usd,

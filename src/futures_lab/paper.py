@@ -135,6 +135,20 @@ class PaperBroker:
             return self.close(market.mid_price, "max_hold", closed_at=current)
         return None
 
+    def close_open_position(
+        self,
+        market: MarketState | None,
+        reason: str = "session_end",
+        closed_at: datetime | None = None,
+    ) -> PaperTrade | None:
+        if self.open_position is None or market is None or market.mid_price is None:
+            return None
+        current = closed_at or market.last_received_at or utc_now()
+        self._update_excursion(self.open_position, market.mid_price)
+        if self.exit_shadow is not None:
+            self.exit_shadow.mark(market, current)
+        return self.close(market.mid_price, reason, closed_at=current)
+
     def _update_excursion(self, pos: PaperPosition, price: float) -> None:
         direction = 1 if pos.side == Side.long else -1
         move = ((price - pos.entry_price) / pos.entry_price) * direction
@@ -234,6 +248,8 @@ class PaperBroker:
             stake_usd=pos.stake_usd,
             notional_usd=pos.notional_usd,
             leverage=pos.leverage,
+            structural_invalidation_price=pos.structural_invalidation_price,
+            structural_adverse_move_pct=pos.structural_adverse_move_pct,
             gross_pnl_usd=gross,
             fees_usd=fees,
             net_pnl_usd=net,

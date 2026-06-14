@@ -161,6 +161,7 @@ class HitAndRunStrategy:
         side = Side.long if long_score >= short_score else Side.short
         if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
             structural = self._range_bound_structural_risk(side.value, market)
+            range_quality = self._range_bound_candidate_quality(side.value, market, structural)
             target_bps = self.settings.range_bound_target_move_pct * 10_000
             stop_bps = float(structural.get("structural_adverse_move_pct") or self.settings.range_bound_stop_move_pct) * 10_000
             ev_loss_bps = max(
@@ -179,6 +180,7 @@ class HitAndRunStrategy:
                 prefer_selected=True,
                 use_micro_confirmation=False,
                 ev_loss_bps=ev_loss_bps,
+                extra_blockers=range_quality["blockers"],
                 reasons=[
                     "range-bound support/resistance candidate",
                     f"range_timeframes={self.settings.range_bound_timeframes}",
@@ -187,6 +189,7 @@ class HitAndRunStrategy:
                     f"ev_loss_bps={ev_loss_bps:.2f}",
                     f"structural_allowed={structural.get('allowed')}",
                     f"structural_account_drawdown={structural.get('account_drawdown_fraction')}",
+                    f"range_quality={range_quality}",
                 ],
             )
         else:
@@ -1053,6 +1056,58 @@ class HitAndRunStrategy:
         )
         return round(self._clamp(score), 4)
 
+    def _range_bound_candidate_quality(self, side: str, market: MarketState, structural: dict) -> dict:
+        context = self._range_bound_context(side, market)
+        if not context["ready"]:
+            return {
+                "ready": False,
+                "blockers": [str(context.get("reason") or "range_context_not_ready")],
+            }
+        local_range_position = market.range_position_180s if market.range_position_180s is not None else 0.5
+        local_edge = (
+            self._clamp((self.settings.range_bound_edge_zone - local_range_position) / self.settings.range_bound_edge_zone)
+            if side == "long"
+            else self._clamp((local_range_position - (1.0 - self.settings.range_bound_edge_zone)) / self.settings.range_bound_edge_zone)
+        )
+        taker_buy_ratio = market.taker_buy_ratio_10s if market.taker_buy_ratio_10s is not None else 0.5
+        flow_alignment = self._clamp(taker_buy_ratio if side == "long" else 1.0 - taker_buy_ratio)
+        book_imbalance = market.book_imbalance_top or 0.0
+        depth_imbalance = market.depth_imbalance_top5 if market.depth_imbalance_top5 is not None else book_imbalance
+        pressure = (book_imbalance + depth_imbalance) / 2.0
+        pressure_alignment = (
+            self._clamp((pressure + 1.0) / 2.0)
+            if side == "long"
+            else self._clamp((-pressure + 1.0) / 2.0)
+        )
+        target_room_pct = float(structural.get("target_room_pct") or context.get("target_room_pct") or 0.0)
+        target_room_multiple = target_room_pct / max(0.000001, self.settings.range_bound_target_move_pct)
+        account_drawdown = float(structural.get("account_drawdown_fraction") or 0.0)
+        blockers = list(structural.get("blockers") or [])
+        if context["edge_score"] < self.settings.range_bound_candidate_min_htf_edge_score:
+            blockers.append("range_htf_edge_not_confirmed")
+        if local_edge < self.settings.range_bound_candidate_min_local_edge:
+            blockers.append("range_local_edge_not_confirmed")
+        if flow_alignment < self.settings.range_bound_candidate_min_flow_alignment:
+            blockers.append("range_flow_not_confirmed")
+        if pressure_alignment < self.settings.range_bound_candidate_min_pressure_alignment:
+            blockers.append("range_pressure_not_confirmed")
+        if target_room_multiple < self.settings.range_bound_candidate_min_target_room_multiple:
+            blockers.append("range_target_room_buffer_too_thin")
+        if account_drawdown > self.settings.range_bound_candidate_max_account_drawdown_fraction:
+            blockers.append("range_candidate_account_drawdown_too_high")
+        return {
+            "ready": True,
+            "side": side,
+            "htf_edge_score": round(context["edge_score"], 4),
+            "local_edge": round(local_edge, 4),
+            "flow_alignment": round(flow_alignment, 4),
+            "pressure_alignment": round(pressure_alignment, 4),
+            "target_room_pct": round(target_room_pct, 6),
+            "target_room_multiple": round(target_room_multiple, 4),
+            "account_drawdown_fraction": round(account_drawdown, 6),
+            "blockers": sorted(set(blockers)),
+        }
+
     def _range_bound_context(self, side: str, market: MarketState) -> dict:
         if self._higher_timeframe_context_stale(market):
             return {"ready": False, "reason": "higher_timeframe_context_stale"}
@@ -1068,6 +1123,7 @@ class HitAndRunStrategy:
             return {"ready": False, "reason": "missing_range_timeframes"}
         edge_scores = []
         room_scores = []
+        room_values = []
         range_scores = []
         trend_scores = []
         structures = []
@@ -1085,6 +1141,7 @@ class HitAndRunStrategy:
             )
             edge_scores.append(edge)
             room_scores.append(self._clamp(room / max(0.000001, self.settings.range_bound_min_room_to_target_pct)))
+            room_values.append(room)
             range_scores.append(self._clamp(range_pct / max(0.000001, self.settings.range_bound_min_average_range_pct)))
             trend_scores.append(trend_score)
             structures.append(str(frame.get("structure") or "unknown"))
@@ -1095,6 +1152,7 @@ class HitAndRunStrategy:
             "used": len(frames),
             "edge_score": average(edge_scores),
             "room_score": average(room_scores),
+            "target_room_pct": min(room_values) if room_values else 0.0,
             "range_score": average(range_scores),
             "average_trend_score": average(trend_scores),
             "structures": structures,

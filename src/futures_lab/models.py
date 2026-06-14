@@ -209,6 +209,8 @@ class PaperTrade(BaseModel):
     stake_usd: float
     notional_usd: float
     leverage: int
+    structural_invalidation_price: float | None = None
+    structural_adverse_move_pct: float | None = None
     gross_pnl_usd: float
     fees_usd: float
     net_pnl_usd: float

@@ -183,6 +183,49 @@ def test_range_bound_uses_structural_invalidation_instead_of_micro_stop():
     assert trade.exit_reason == "structural_invalidation"
 
 
+def test_paper_broker_closes_open_position_at_session_end_with_structural_fields():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        STRATEGY_VARIANT="range_bound_support_resistance",
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        RANGE_BOUND_LEVERAGE=200,
+    )
+    market = _market(
+        100.0,
+        symbol="ETHUSDT",
+        range_position_180s=0.08,
+        taker_buy_ratio_10s=0.64,
+        taker_buy_ratio_30s=0.58,
+        book_imbalance_top=0.22,
+        depth_imbalance_top5=0.30,
+        higher_timeframe_context=_range_context(0.10, support_distance=0.030, resistance_distance=0.012),
+        higher_timeframe_context_age_seconds=60,
+        higher_timeframe_bias_side="neutral",
+        higher_timeframe_bias_strength=0.05,
+    )
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened = broker.open_from_decision(decision, opened_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    closed = broker.close_open_position(
+        _market(
+            100.8,
+            symbol="ETHUSDT",
+            last_received_at=datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc),
+        ),
+        reason="session_end",
+    )
+
+    assert opened is not None
+    assert closed is not None
+    assert closed.exit_reason == "session_end"
+    assert closed.closed_at == datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    assert closed.structural_invalidation_price == opened.structural_invalidation_price
+    assert closed.structural_adverse_move_pct == opened.structural_adverse_move_pct
+    assert broker.open_position is None
+    assert broker.trades_today == 1
+
+
 def _edge_decision(target_move_pct: float, selected: dict) -> Decision:
     price = 100.0
     return Decision(

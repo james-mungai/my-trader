@@ -110,6 +110,30 @@ class Settings(BaseSettings):
         default=0.25,
         alias="RANGE_BOUND_EXPECTED_LOSS_FRACTION_OF_STRUCTURAL",
     )
+    range_bound_candidate_min_htf_edge_score: float = Field(
+        default=0.55,
+        alias="RANGE_BOUND_CANDIDATE_MIN_HTF_EDGE_SCORE",
+    )
+    range_bound_candidate_min_local_edge: float = Field(
+        default=0.60,
+        alias="RANGE_BOUND_CANDIDATE_MIN_LOCAL_EDGE",
+    )
+    range_bound_candidate_min_flow_alignment: float = Field(
+        default=0.52,
+        alias="RANGE_BOUND_CANDIDATE_MIN_FLOW_ALIGNMENT",
+    )
+    range_bound_candidate_min_pressure_alignment: float = Field(
+        default=0.52,
+        alias="RANGE_BOUND_CANDIDATE_MIN_PRESSURE_ALIGNMENT",
+    )
+    range_bound_candidate_min_target_room_multiple: float = Field(
+        default=1.20,
+        alias="RANGE_BOUND_CANDIDATE_MIN_TARGET_ROOM_MULTIPLE",
+    )
+    range_bound_candidate_max_account_drawdown_fraction: float = Field(
+        default=0.55,
+        alias="RANGE_BOUND_CANDIDATE_MAX_ACCOUNT_DRAWDOWN_FRACTION",
+    )
     stateful_target_feasibility_fraction: float = Field(default=0.60, alias="STATEFUL_TARGET_FEASIBILITY_FRACTION")
     stateful_adaptive_target_fraction: float = Field(default=0.50, alias="STATEFUL_ADAPTIVE_TARGET_FRACTION")
     stateful_adaptive_min_sequence_confidence: float = Field(default=0.93, alias="STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE")

@@ -63,6 +63,7 @@ class BaselineCandidateInput:
     prefer_selected: bool = False
     use_micro_confirmation: bool = True
     ev_loss_bps: float | None = None
+    extra_blockers: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
 
 
@@ -146,6 +147,8 @@ class EdgeRouter:
         )
         if not micro_gate["allowed"]:
             return self._with_blockers(candidate, micro_gate["blockers"])
+        if baseline.extra_blockers:
+            return self._with_blockers(candidate, baseline.extra_blockers)
         return candidate
 
     def _taker_impulse_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:

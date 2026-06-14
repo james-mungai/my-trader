@@ -299,6 +299,37 @@ def test_range_bound_strategy_scales_leverage_to_structural_box():
     assert risk["account_drawdown_fraction"] <= 0.65
 
 
+def test_range_bound_selected_candidate_blocks_thin_target_room():
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.70,
+            STRATEGY_VARIANT="range_bound_support_resistance",
+            RANGE_BOUND_TARGET_MOVE_PCT=0.005,
+            RANGE_BOUND_CANDIDATE_MIN_TARGET_ROOM_MULTIPLE=1.20,
+        )
+    )
+
+    decision = strategy.decide(
+        _market(
+            symbol="ETHUSDT",
+            range_position_180s=0.08,
+            taker_buy_ratio_10s=0.64,
+            taker_buy_ratio_30s=0.58,
+            book_imbalance_top=0.22,
+            depth_imbalance_top5=0.30,
+            higher_timeframe_context=_range_context(0.10, support_distance=0.001, resistance_distance=0.0055),
+            higher_timeframe_context_age_seconds=60,
+            higher_timeframe_bias_side="neutral",
+            higher_timeframe_bias_strength=0.05,
+        )
+    )
+
+    selected = decision.evidence["edge_router"]["selected_candidate"]
+    assert decision.action == DecisionAction.propose_long
+    assert selected["strategy"] == "range_bound_support_resistance"
+    assert "range_target_room_buffer_too_thin" in selected["blockers"]
+
+
 def test_range_bound_strategy_waits_without_range_context():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="range_bound_support_resistance"))
 
