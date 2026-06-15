@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from futures_lab.config import Settings
 from futures_lab.models import Decision, DecisionAction, MarketState, Regime, TradeMode
@@ -224,6 +224,45 @@ def test_paper_broker_closes_open_position_at_session_end_with_structural_fields
     assert closed.structural_adverse_move_pct == opened.structural_adverse_move_pct
     assert broker.open_position is None
     assert broker.trades_today == 1
+
+
+def test_daily_rollover_preserves_range_position_until_natural_close():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        STRATEGY_VARIANT="range_bound_support_resistance",
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        RANGE_BOUND_LEVERAGE=200,
+    )
+    market = _market(
+        100.0,
+        symbol="ETHUSDT",
+        range_position_180s=0.08,
+        taker_buy_ratio_10s=0.64,
+        taker_buy_ratio_30s=0.58,
+        book_imbalance_top=0.22,
+        depth_imbalance_top5=0.30,
+        higher_timeframe_context=_range_context(0.10, support_distance=0.030, resistance_distance=0.012),
+        higher_timeframe_context_age_seconds=60,
+        higher_timeframe_bias_side="neutral",
+        higher_timeframe_bias_strength=0.05,
+    )
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened = broker.open_from_decision(decision, opened_at=datetime(2026, 1, 1, 23, 59, tzinfo=timezone.utc))
+    broker.realized_pnl_usd = 123.0
+    broker.trades_today = 4
+    broker.day = "2026-01-01"
+
+    trade = broker.mark(_market(opened.take_profit_price, symbol="ETHUSDT", higher_timeframe_context=market.higher_timeframe_context))
+
+    assert trade is not None
+    assert trade.exit_reason == "take_profit"
+    assert trade.structural_invalidation_price == opened.structural_invalidation_price
+    assert trade.structural_adverse_move_pct == opened.structural_adverse_move_pct
+    assert broker.day == date.today().isoformat()
+    assert broker.realized_pnl_usd == pytest.approx(trade.net_pnl_usd)
+    assert broker.trades_today == 1
+    assert broker.open_position is None
 
 
 def _edge_decision(target_move_pct: float, selected: dict) -> Decision:
