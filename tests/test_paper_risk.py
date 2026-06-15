@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from futures_lab.config import Settings
 from futures_lab.models import Decision, DecisionAction, MarketState, Regime, TradeMode
@@ -122,6 +122,25 @@ def test_paper_broker_closes_open_position_at_session_end():
     assert closed.closed_at == datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
     assert broker.open_position is None
     assert broker.trades_today == 1
+
+
+def test_daily_rollover_preserves_open_position_until_natural_close():
+    settings = Settings(MIN_CONFIDENCE=0.70, PAPER_LIVE_EDGE_GATE_ENABLED=False)
+    decision = HitAndRunStrategy(settings).decide(_market())
+    broker = PaperBroker(settings)
+    position = broker.open_from_decision(decision, opened_at=datetime(2026, 1, 1, 23, 59, tzinfo=timezone.utc))
+    broker.realized_pnl_usd = 123.0
+    broker.trades_today = 4
+    broker.day = "2026-01-01"
+
+    trade = broker.mark(_market(position.take_profit_price))
+
+    assert trade is not None
+    assert trade.exit_reason == "take_profit"
+    assert broker.day == date.today().isoformat()
+    assert broker.realized_pnl_usd == pytest.approx(trade.net_pnl_usd)
+    assert broker.trades_today == 1
+    assert broker.open_position is None
 
 
 def _edge_decision(target_move_pct: float, selected: dict) -> Decision:

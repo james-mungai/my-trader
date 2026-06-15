@@ -237,6 +237,4 @@ class PaperBroker:
         self.day = today
         self.realized_pnl_usd = 0.0
         self.trades_today = 0
-        self.open_position = None
         self.last_trade = None
-        self.exit_shadow = None
