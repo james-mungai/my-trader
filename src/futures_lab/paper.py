@@ -125,6 +125,8 @@ class PaperBroker:
                 return self.close(market.mid_price, "stop_loss", closed_at=current)
             if self._should_close_structural_invalidation(pos, market.mid_price):
                 return self.close(market.mid_price, "structural_invalidation", closed_at=current)
+        if self._should_close_range_time_decay(pos, market, current):
+            return self.close(market.mid_price, "range_time_decay", closed_at=current)
         if self._should_close_mfe_trailing(pos, market):
             return self.close(market.mid_price, "mfe_trailing_stop", closed_at=current)
         if pos.max_adverse_move_pct <= -abs(self._emergency_adverse_limit(pos)):
@@ -206,6 +208,33 @@ class PaperBroker:
             (market.realized_vol_60s_pct or 0.0) * self.settings.paper_mfe_trail_vol_multiplier,
         )
         return (pos.max_favorable_move_pct - self._move_pct(pos, market.mid_price)) >= trail_distance
+
+    def _should_close_range_time_decay(
+        self,
+        pos: PaperPosition,
+        market: MarketState,
+        current: datetime,
+    ) -> bool:
+        if not self.settings.range_bound_time_decay_exit_enabled:
+            return False
+        if pos.trade_profile != "range_bound_support_resistance" or market.mid_price is None:
+            return False
+        elapsed_seconds = (current - pos.opened_at).total_seconds()
+        if elapsed_seconds < self.settings.range_bound_time_decay_seconds:
+            return False
+        round_trip_fee_pct = 2 * (self.settings.taker_fee_bps / 10_000)
+        required_mfe = round_trip_fee_pct * self.settings.range_bound_time_decay_min_mfe_fee_multiple
+        if pos.max_favorable_move_pct >= required_mfe:
+            return False
+        move = self._move_pct(pos, market.mid_price)
+        return move <= 0.0 or self._range_flow_faded(pos, market)
+
+    def _range_flow_faded(self, pos: PaperPosition, market: MarketState) -> bool:
+        r60 = market.return_60s_pct or 0.0
+        buy_10s = market.taker_buy_ratio_10s
+        if pos.side == Side.long:
+            return r60 <= 0.0 or (buy_10s is not None and buy_10s < 0.50)
+        return r60 >= 0.0 or (buy_10s is not None and buy_10s > 0.50)
 
     def _move_pct(self, pos: PaperPosition, price: float) -> float:
         direction = 1 if pos.side == Side.long else -1

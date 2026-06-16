@@ -134,6 +134,15 @@ class Settings(BaseSettings):
         default=0.55,
         alias="RANGE_BOUND_CANDIDATE_MAX_ACCOUNT_DRAWDOWN_FRACTION",
     )
+    range_bound_time_decay_exit_enabled: bool = Field(
+        default=False,
+        alias="RANGE_BOUND_TIME_DECAY_EXIT_ENABLED",
+    )
+    range_bound_time_decay_seconds: int = Field(default=180, alias="RANGE_BOUND_TIME_DECAY_SECONDS")
+    range_bound_time_decay_min_mfe_fee_multiple: float = Field(
+        default=1.25,
+        alias="RANGE_BOUND_TIME_DECAY_MIN_MFE_FEE_MULTIPLE",
+    )
     stateful_target_feasibility_fraction: float = Field(default=0.60, alias="STATEFUL_TARGET_FEASIBILITY_FRACTION")
     stateful_adaptive_target_fraction: float = Field(default=0.50, alias="STATEFUL_ADAPTIVE_TARGET_FRACTION")
     stateful_adaptive_min_sequence_confidence: float = Field(default=0.93, alias="STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE")

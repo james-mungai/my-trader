@@ -183,6 +183,53 @@ def test_range_bound_uses_structural_invalidation_instead_of_micro_stop():
     assert trade.exit_reason == "structural_invalidation"
 
 
+def test_range_bound_time_decay_cuts_stale_entry_before_structural_break():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        STRATEGY_VARIANT="range_bound_support_resistance",
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        ENABLE_PRICE_STOP=False,
+        ENABLE_FAST_FAILURE_EXIT=False,
+        RANGE_BOUND_LEVERAGE=200,
+        RANGE_BOUND_TIME_DECAY_EXIT_ENABLED=True,
+        RANGE_BOUND_TIME_DECAY_SECONDS=180,
+        RANGE_BOUND_TIME_DECAY_MIN_MFE_FEE_MULTIPLE=1.25,
+    )
+    market = _market(
+        100.0,
+        symbol="ETHUSDT",
+        range_position_180s=0.08,
+        taker_buy_ratio_10s=0.64,
+        taker_buy_ratio_30s=0.58,
+        book_imbalance_top=0.22,
+        depth_imbalance_top5=0.30,
+        higher_timeframe_context=_range_context(0.10, support_distance=0.030, resistance_distance=0.012),
+        higher_timeframe_context_age_seconds=60,
+        higher_timeframe_bias_side="neutral",
+        higher_timeframe_bias_strength=0.05,
+    )
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert broker.mark(_market(100.02), timestamp=opened_at + timedelta(seconds=120)) is None
+
+    trade = broker.mark(
+        _market(
+            99.95,
+            return_60s_pct=-0.0002,
+            taker_buy_ratio_10s=0.44,
+            higher_timeframe_context=market.higher_timeframe_context,
+        ),
+        timestamp=opened_at + timedelta(seconds=181),
+    )
+
+    assert trade is not None
+    assert trade.exit_reason == "range_time_decay"
+
+
 def test_paper_broker_closes_open_position_at_session_end_with_structural_fields():
     settings = Settings(
         MIN_CONFIDENCE=0.70,
