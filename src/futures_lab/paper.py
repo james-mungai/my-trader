@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import Any
 
 from futures_lab.config import Settings
 from futures_lab.exit_shadow import ExitShadowEvaluator
@@ -17,6 +18,214 @@ from futures_lab.models import (
 
 
 @dataclass
+class RangeExitCounterfactual:
+    symbol: str
+    side: Side
+    trade_profile: str
+    entry_price: float
+    actual_exit_price: float
+    quantity: float
+    stake_usd: float
+    notional_usd: float
+    leverage: int
+    take_profit_price: float
+    structural_invalidation_price: float | None
+    structural_adverse_move_pct: float | None
+    opened_at: datetime
+    actual_closed_at: datetime
+    actual_exit_reason: str
+    actual_net_pnl_usd: float
+    taker_fee_bps: float
+    emergency_adverse_move_pct: float
+    inner_loss_move_pct: float
+    rough_isolated_liquidation_price: float | None
+    rough_cross_liquidation_price: float | None
+    max_horizon_seconds: int
+    max_favorable_move_pct: float = 0.0
+    max_adverse_move_pct: float = 0.0
+    max_favorable_price: float | None = None
+    max_adverse_price: float | None = None
+    max_favorable_at: datetime | None = None
+    max_adverse_at: datetime | None = None
+    hit_events: list[dict[str, Any]] = field(default_factory=list)
+    _hit_names: set[str] = field(default_factory=set)
+
+    @property
+    def id(self) -> str:
+        return f"{self.symbol}:{self.opened_at.isoformat()}:{self.actual_closed_at.isoformat()}:{self.side.value}"
+
+    def open_event(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "trade_profile": self.trade_profile,
+            "entry_price": self.entry_price,
+            "actual_exit_price": self.actual_exit_price,
+            "take_profit_price": self.take_profit_price,
+            "structural_invalidation_price": self.structural_invalidation_price,
+            "rough_isolated_liquidation_price": self.rough_isolated_liquidation_price,
+            "rough_cross_liquidation_price": self.rough_cross_liquidation_price,
+            "opened_at": self.opened_at.isoformat(),
+            "actual_closed_at": self.actual_closed_at.isoformat(),
+            "actual_exit_reason": self.actual_exit_reason,
+            "actual_net_pnl_usd": self.actual_net_pnl_usd,
+            "notional_usd": self.notional_usd,
+            "leverage": self.leverage,
+            "max_horizon_seconds": self.max_horizon_seconds,
+        }
+
+    def mark(self, price: float, current: datetime) -> dict[str, Any] | None:
+        self._update_excursion(price, current)
+        for name, threshold in [
+            ("inner_loss", self._inner_loss_price()),
+            ("rough_isolated_liquidation", self.rough_isolated_liquidation_price),
+        ]:
+            if threshold is not None and self._crossed_adverse(price, threshold):
+                self._record_hit(name, price, threshold, current)
+
+        if self._crossed_favorable(price, self.take_profit_price):
+            return self._close("target_after_time_decay", price, current, threshold=self.take_profit_price)
+        if (
+            self.structural_invalidation_price is not None
+            and self._crossed_adverse(price, self.structural_invalidation_price)
+        ):
+            return self._close(
+                "structural_invalidation_after_time_decay",
+                price,
+                current,
+                threshold=self.structural_invalidation_price,
+            )
+        emergency_price = self._emergency_price()
+        if self._crossed_adverse(price, emergency_price):
+            return self._close("emergency_after_time_decay", price, current, threshold=emergency_price)
+        if (
+            self.rough_cross_liquidation_price is not None
+            and self._crossed_adverse(price, self.rough_cross_liquidation_price)
+        ):
+            return self._close(
+                "rough_cross_liquidation_after_time_decay",
+                price,
+                current,
+                threshold=self.rough_cross_liquidation_price,
+            )
+        elapsed = (current - self.opened_at).total_seconds()
+        if self.max_horizon_seconds > 0 and elapsed >= self.max_horizon_seconds:
+            return self._close("counterfactual_max_horizon", price, current)
+        return None
+
+    def close_at_session_end(self, price: float, current: datetime, reason: str = "session_end") -> dict[str, Any]:
+        self._update_excursion(price, current)
+        return self._close(f"counterfactual_{reason}", price, current)
+
+    def _close(
+        self,
+        reason: str,
+        price: float,
+        current: datetime,
+        threshold: float | None = None,
+    ) -> dict[str, Any]:
+        if threshold is not None:
+            self._record_hit(reason, price, threshold, current)
+        counterfactual_net = self._net_pnl(price)
+        return {
+            "id": self.id,
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "trade_profile": self.trade_profile,
+            "entry_price": self.entry_price,
+            "actual_exit_price": self.actual_exit_price,
+            "counterfactual_exit_price": price,
+            "actual_exit_reason": self.actual_exit_reason,
+            "counterfactual_exit_reason": reason,
+            "opened_at": self.opened_at.isoformat(),
+            "actual_closed_at": self.actual_closed_at.isoformat(),
+            "counterfactual_closed_at": current.isoformat(),
+            "seconds_after_actual_exit": (current - self.actual_closed_at).total_seconds(),
+            "seconds_from_entry": (current - self.opened_at).total_seconds(),
+            "actual_net_pnl_usd": self.actual_net_pnl_usd,
+            "counterfactual_net_pnl_usd": counterfactual_net,
+            "net_delta_vs_actual_usd": counterfactual_net - self.actual_net_pnl_usd,
+            "counterfactual_false_positive_exit": reason == "target_after_time_decay",
+            "max_favorable_move_pct": self.max_favorable_move_pct,
+            "max_adverse_move_pct": self.max_adverse_move_pct,
+            "max_favorable_price": self.max_favorable_price,
+            "max_adverse_price": self.max_adverse_price,
+            "max_favorable_at": self.max_favorable_at.isoformat() if self.max_favorable_at else None,
+            "max_adverse_at": self.max_adverse_at.isoformat() if self.max_adverse_at else None,
+            "max_favorable_net_pnl_usd": self._net_pnl(self.max_favorable_price)
+            if self.max_favorable_price is not None
+            else None,
+            "max_adverse_net_pnl_usd": self._net_pnl(self.max_adverse_price)
+            if self.max_adverse_price is not None
+            else None,
+            "hit_events": self.hit_events,
+            "rough_isolated_liquidation_price": self.rough_isolated_liquidation_price,
+            "rough_cross_liquidation_price": self.rough_cross_liquidation_price,
+            "structural_invalidation_price": self.structural_invalidation_price,
+            "take_profit_price": self.take_profit_price,
+        }
+
+    def _record_hit(self, name: str, price: float, threshold: float, current: datetime) -> None:
+        if name in self._hit_names:
+            return
+        self._hit_names.add(name)
+        self.hit_events.append(
+            {
+                "name": name,
+                "price": price,
+                "threshold": threshold,
+                "timestamp": current.isoformat(),
+                "seconds_after_actual_exit": (current - self.actual_closed_at).total_seconds(),
+                "seconds_from_entry": (current - self.opened_at).total_seconds(),
+            }
+        )
+
+    def _update_excursion(self, price: float, current: datetime) -> None:
+        move = self._move_pct(price)
+        if self.max_favorable_price is None or move > self.max_favorable_move_pct:
+            self.max_favorable_move_pct = move
+            self.max_favorable_price = price
+            self.max_favorable_at = current
+        if self.max_adverse_price is None or move < self.max_adverse_move_pct:
+            self.max_adverse_move_pct = move
+            self.max_adverse_price = price
+            self.max_adverse_at = current
+
+    def _move_pct(self, price: float) -> float:
+        direction = 1 if self.side == Side.long else -1
+        return ((price - self.entry_price) / self.entry_price) * direction
+
+    def _net_pnl(self, price: float | None) -> float:
+        if price is None:
+            return 0.0
+        direction = 1 if self.side == Side.long else -1
+        gross = (price - self.entry_price) * self.quantity * direction
+        fees = (self.notional_usd * 2) * (self.taker_fee_bps / 10_000)
+        return gross - fees
+
+    def _crossed_favorable(self, price: float, threshold: float) -> bool:
+        if self.side == Side.long:
+            return price >= threshold
+        return price <= threshold
+
+    def _crossed_adverse(self, price: float, threshold: float) -> bool:
+        if self.side == Side.long:
+            return price <= threshold
+        return price >= threshold
+
+    def _inner_loss_price(self) -> float:
+        if self.side == Side.long:
+            return self.entry_price * (1 - abs(self.inner_loss_move_pct))
+        return self.entry_price * (1 + abs(self.inner_loss_move_pct))
+
+    def _emergency_price(self) -> float:
+        if self.side == Side.long:
+            return self.entry_price * (1 - abs(self.emergency_adverse_move_pct))
+        return self.entry_price * (1 + abs(self.emergency_adverse_move_pct))
+
+
+@dataclass
 class PaperBroker:
     settings: Settings
     realized_pnl_usd: float = 0.0
@@ -25,6 +234,8 @@ class PaperBroker:
     last_trade: PaperTrade | None = None
     exit_shadow: ExitShadowEvaluator | None = None
     day: str = field(default_factory=lambda: date.today().isoformat())
+    range_exit_counterfactuals: list[RangeExitCounterfactual] = field(default_factory=list)
+    audit_events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     def state(self) -> PaperState:
         self._reset_day_if_needed()
@@ -45,6 +256,8 @@ class PaperBroker:
         self.open_position = None
         self.last_trade = None
         self.exit_shadow = None
+        self.range_exit_counterfactuals.clear()
+        self.audit_events.clear()
         self.day = date.today().isoformat()
         return self.state()
 
@@ -100,14 +313,17 @@ class PaperBroker:
 
     def mark(self, market: MarketState, timestamp: datetime | None = None) -> PaperTrade | None:
         self._reset_day_if_needed()
-        if self.open_position is None or market.mid_price is None:
+        if market.mid_price is None:
             return None
         if not market.connected:
             return None
         if market.data_age_seconds is not None and market.data_age_seconds > self.settings.stale_after_seconds:
             return None
-        pos = self.open_position
         current = timestamp or utc_now()
+        self._mark_range_exit_counterfactuals(market.mid_price, current)
+        if self.open_position is None:
+            return None
+        pos = self.open_position
         self._update_excursion(pos, market.mid_price)
         if self.exit_shadow is not None:
             self.exit_shadow.mark(market, current)
@@ -227,7 +443,11 @@ class PaperBroker:
         if pos.max_favorable_move_pct >= required_mfe:
             return False
         move = self._move_pct(pos, market.mid_price)
-        return move <= 0.0 or self._range_flow_faded(pos, market)
+        if move <= -abs(self.settings.range_bound_time_decay_adverse_move_pct):
+            return True
+        return self._range_flow_faded(pos, market) and move <= -abs(
+            self.settings.range_bound_time_decay_flow_adverse_move_pct
+        )
 
     def _range_flow_faded(self, pos: PaperPosition, market: MarketState) -> bool:
         r60 = market.return_60s_pct or 0.0
@@ -287,12 +507,100 @@ class PaperBroker:
             closed_at=actual_closed_at,
             exit_shadow=exit_shadow,
         )
+        self._start_range_exit_counterfactual(pos, trade)
         self.open_position = None
         self.exit_shadow = None
         self.last_trade = trade
         self.realized_pnl_usd += net
         self.trades_today += 1
         return trade
+
+    def drain_audit_events(self) -> list[tuple[str, dict[str, Any]]]:
+        events = list(self.audit_events)
+        self.audit_events.clear()
+        return events
+
+    def close_range_exit_counterfactuals(
+        self,
+        market: MarketState | None,
+        reason: str = "session_end",
+        timestamp: datetime | None = None,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        if market is None or market.mid_price is None:
+            return []
+        current = timestamp or market.last_received_at or utc_now()
+        closed = [
+            ("range_exit_counterfactual_close", counterfactual.close_at_session_end(market.mid_price, current, reason))
+            for counterfactual in self.range_exit_counterfactuals
+        ]
+        self.range_exit_counterfactuals.clear()
+        return closed
+
+    def _start_range_exit_counterfactual(self, pos: PaperPosition, trade: PaperTrade) -> None:
+        if not self.settings.range_bound_exit_counterfactual_enabled:
+            return
+        if pos.trade_profile != "range_bound_support_resistance" or trade.exit_reason != "range_time_decay":
+            return
+        counterfactual = RangeExitCounterfactual(
+            symbol=pos.symbol,
+            side=pos.side,
+            trade_profile=pos.trade_profile,
+            entry_price=pos.entry_price,
+            actual_exit_price=trade.exit_price,
+            quantity=pos.quantity,
+            stake_usd=pos.stake_usd,
+            notional_usd=pos.notional_usd,
+            leverage=pos.leverage,
+            take_profit_price=pos.take_profit_price,
+            structural_invalidation_price=pos.structural_invalidation_price,
+            structural_adverse_move_pct=pos.structural_adverse_move_pct,
+            opened_at=pos.opened_at,
+            actual_closed_at=trade.closed_at,
+            actual_exit_reason=trade.exit_reason,
+            actual_net_pnl_usd=trade.net_pnl_usd,
+            taker_fee_bps=self.settings.taker_fee_bps,
+            emergency_adverse_move_pct=self._emergency_adverse_limit(pos),
+            inner_loss_move_pct=self.settings.range_bound_stop_move_pct,
+            rough_isolated_liquidation_price=self._rough_liquidation_price(
+                pos,
+                collateral_usd=pos.stake_usd,
+            ),
+            rough_cross_liquidation_price=self._rough_liquidation_price(
+                pos,
+                collateral_usd=self.settings.account_equity_usd
+                * self.settings.range_bound_exit_counterfactual_cross_wallet_fraction,
+            ),
+            max_horizon_seconds=self.settings.range_bound_exit_counterfactual_horizon_seconds,
+        )
+        self.range_exit_counterfactuals.append(counterfactual)
+        self.audit_events.append(("range_exit_counterfactual_open", counterfactual.open_event()))
+
+    def _mark_range_exit_counterfactuals(self, price: float, current: datetime) -> None:
+        if not self.range_exit_counterfactuals:
+            return
+        active: list[RangeExitCounterfactual] = []
+        for counterfactual in self.range_exit_counterfactuals:
+            event = counterfactual.mark(price, current)
+            if event is None:
+                active.append(counterfactual)
+            else:
+                self.audit_events.append(("range_exit_counterfactual_close", event))
+        self.range_exit_counterfactuals = active
+
+    def _rough_liquidation_price(self, pos: PaperPosition, collateral_usd: float) -> float | None:
+        if collateral_usd <= 0 or pos.notional_usd <= 0:
+            return None
+        close_fee_pct = self.settings.taker_fee_bps / 10_000
+        adverse_buffer = (
+            collateral_usd / pos.notional_usd
+            - self.settings.range_bound_exit_counterfactual_maintenance_margin_pct
+            - close_fee_pct
+        )
+        if adverse_buffer <= 0:
+            return pos.entry_price
+        if pos.side == Side.long:
+            return pos.entry_price * (1 - adverse_buffer)
+        return pos.entry_price * (1 + adverse_buffer)
 
     def _reset_day_if_needed(self) -> None:
         today = date.today().isoformat()

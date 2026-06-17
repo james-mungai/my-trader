@@ -8,6 +8,7 @@ from futures_lab.data_ops import (
     summarize_candidate_outcomes,
     summarize_data,
     summarize_exit_shadow,
+    summarize_range_exit_counterfactuals,
     summarize_regime_outcomes,
 )
 
@@ -91,6 +92,30 @@ def test_exit_shadow_summary_counts_policy_edges(tmp_path):
     assert summary.policies["time_decay"].net_vs_fixed_usd == 42
     assert summary.policies["time_decay"].improved_vs_fixed == 1
     assert summary.policies["fixed_tp_stop"].exit_reasons == {"actual_stop_loss": 1}
+
+
+def test_range_exit_counterfactual_summary_counts_false_positive_exits(tmp_path):
+    audit_path = tmp_path / "audit.log"
+    audit_path.write_text(
+        "\n".join(
+            [
+                '{"event":"range_exit_counterfactual_open","payload":{"id":"a"}}',
+                '{"event":"range_exit_counterfactual_close","payload":{"id":"a","counterfactual_exit_reason":"target_after_time_decay","counterfactual_false_positive_exit":true,"actual_net_pnl_usd":-21.45,"counterfactual_net_pnl_usd":126.0,"net_delta_vs_actual_usd":147.45,"max_favorable_move_pct":0.006,"max_adverse_move_pct":-0.002,"hit_events":[{"name":"target_after_time_decay"},{"name":"rough_isolated_liquidation"}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize_range_exit_counterfactuals(Settings(DATA_DIR=str(tmp_path)))
+
+    assert summary.opens == 1
+    assert summary.closes == 1
+    assert summary.false_positive_exits == 1
+    assert summary.close_reasons == {"target_after_time_decay": 1}
+    assert summary.hit_events == {"target_after_time_decay": 1, "rough_isolated_liquidation": 1}
+    assert summary.net_delta_vs_actual_usd == 147.45
+    assert summary.worst_max_adverse_move_pct == -0.002
 
 
 def test_candidate_outcome_summary_compares_accepted_and_rejected(tmp_path):

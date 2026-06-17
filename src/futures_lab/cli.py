@@ -12,6 +12,7 @@ from futures_lab.data_ops import (
     summarize_candidate_outcomes,
     summarize_data,
     summarize_exit_shadow,
+    summarize_range_exit_counterfactuals,
     summarize_regime_outcomes,
 )
 from futures_lab.latency_probe import build_probe_streams, run_latency_probe
@@ -250,6 +251,8 @@ def main() -> None:
 
     sub.add_parser("exit-shadow-summary", help="Summarize fee-aware shadow exit policy outcomes.")
 
+    sub.add_parser("range-exit-counterfactual-summary", help="Summarize range time-decay hindsight outcomes.")
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -328,6 +331,8 @@ def main() -> None:
         print(json.dumps(summarize_candidate_outcomes(Settings()).model_dump(), indent=2))
     elif args.command == "exit-shadow-summary":
         print(json.dumps(summarize_exit_shadow(Settings()).model_dump(), indent=2))
+    elif args.command == "range-exit-counterfactual-summary":
+        print(json.dumps(summarize_range_exit_counterfactuals(Settings()).model_dump(), indent=2))
     elif args.command == "compress-raw":
         print(
             json.dumps(

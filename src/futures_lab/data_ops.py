@@ -462,6 +462,86 @@ def summarize_exit_shadow(settings: Settings) -> ExitShadowSummary:
     return summary
 
 
+@dataclass
+class RangeExitCounterfactualSummary:
+    data_dir: str
+    opens: int = 0
+    closes: int = 0
+    false_positive_exits: int = 0
+    close_reasons: dict[str, int] = field(default_factory=dict)
+    hit_events: dict[str, int] = field(default_factory=dict)
+    actual_net_pnl_usd: float = 0.0
+    counterfactual_net_pnl_usd: float = 0.0
+    net_delta_vs_actual_usd: float = 0.0
+    average_max_favorable_move_pct: float | None = None
+    average_max_adverse_move_pct: float | None = None
+    worst_max_adverse_move_pct: float | None = None
+
+    def model_dump(self) -> dict:
+        return {
+            "data_dir": self.data_dir,
+            "opens": self.opens,
+            "closes": self.closes,
+            "false_positive_exits": self.false_positive_exits,
+            "false_positive_rate": round(self.false_positive_exits / self.closes, 6) if self.closes else None,
+            "close_reasons": self.close_reasons,
+            "hit_events": self.hit_events,
+            "actual_net_pnl_usd": round(self.actual_net_pnl_usd, 4),
+            "counterfactual_net_pnl_usd": round(self.counterfactual_net_pnl_usd, 4),
+            "net_delta_vs_actual_usd": round(self.net_delta_vs_actual_usd, 4),
+            "average_max_favorable_move_pct": self.average_max_favorable_move_pct,
+            "average_max_adverse_move_pct": self.average_max_adverse_move_pct,
+            "worst_max_adverse_move_pct": self.worst_max_adverse_move_pct,
+        }
+
+
+def summarize_range_exit_counterfactuals(settings: Settings) -> RangeExitCounterfactualSummary:
+    summary = RangeExitCounterfactualSummary(data_dir=str(settings.data_dir))
+    audit_path = Path(settings.data_dir) / "audit.log"
+    if not audit_path.exists():
+        return summary
+    close_reasons: Counter[str] = Counter()
+    hit_events: Counter[str] = Counter()
+    max_favorable: list[float] = []
+    max_adverse: list[float] = []
+    with audit_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            event = row.get("event")
+            payload = row.get("payload") or {}
+            if event == "range_exit_counterfactual_open":
+                summary.opens += 1
+                continue
+            if event != "range_exit_counterfactual_close":
+                continue
+            summary.closes += 1
+            reason = str(payload.get("counterfactual_exit_reason") or "unknown")
+            close_reasons[reason] += 1
+            if payload.get("counterfactual_false_positive_exit"):
+                summary.false_positive_exits += 1
+            summary.actual_net_pnl_usd += float(payload.get("actual_net_pnl_usd") or 0.0)
+            summary.counterfactual_net_pnl_usd += float(payload.get("counterfactual_net_pnl_usd") or 0.0)
+            summary.net_delta_vs_actual_usd += float(payload.get("net_delta_vs_actual_usd") or 0.0)
+            favorable = payload.get("max_favorable_move_pct")
+            adverse = payload.get("max_adverse_move_pct")
+            if isinstance(favorable, (int, float)):
+                max_favorable.append(float(favorable))
+            if isinstance(adverse, (int, float)):
+                max_adverse.append(float(adverse))
+            for hit in payload.get("hit_events") or []:
+                hit_events[str(hit.get("name") or "unknown")] += 1
+    summary.close_reasons = dict(close_reasons)
+    summary.hit_events = dict(hit_events)
+    summary.average_max_favorable_move_pct = (
+        round(sum(max_favorable) / len(max_favorable), 6) if max_favorable else None
+    )
+    summary.average_max_adverse_move_pct = round(sum(max_adverse) / len(max_adverse), 6) if max_adverse else None
+    summary.worst_max_adverse_move_pct = round(min(max_adverse), 6) if max_adverse else None
+    return summary
+
+
 def prune_raw(settings: Settings, older_than_hours: float, dry_run: bool = False) -> FileOperationSummary:
     raw_dir = Path(settings.data_dir) / "raw_ws"
     summary = FileOperationSummary(data_dir=str(settings.data_dir))

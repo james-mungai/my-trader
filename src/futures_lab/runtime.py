@@ -83,6 +83,8 @@ class TradingRuntime:
         if closed is not None:
             self.audit.write("paper_close", closed.model_dump())
             self.recon_log.write_paper_trade(closed)
+        for event, payload in self.paper.close_range_exit_counterfactuals(self.latest_market, reason="session_end"):
+            self.audit.write(event, payload)
         for event in self.shadow.close_all(self.latest_market, reason="session_end"):
             self.audit.write("shadow_trade", event)
             self.recon_log.write_shadow_trade(event)
@@ -127,6 +129,8 @@ class TradingRuntime:
             if closed is not None:
                 self.audit.write("paper_close", closed.model_dump())
                 self.recon_log.write_paper_trade(closed)
+            for event, payload in self.paper.drain_audit_events():
+                self.audit.write(event, payload)
             for event in self.shadow.mark(market):
                 self.audit.write("shadow_trade", event)
                 self.recon_log.write_shadow_trade(event)

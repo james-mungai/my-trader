@@ -230,6 +230,123 @@ def test_range_bound_time_decay_cuts_stale_entry_before_structural_break():
     assert trade.exit_reason == "range_time_decay"
 
 
+def test_range_bound_time_decay_keeps_flat_trade_inside_structural_box():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        STRATEGY_VARIANT="range_bound_support_resistance",
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        ENABLE_PRICE_STOP=False,
+        ENABLE_FAST_FAILURE_EXIT=False,
+        RANGE_BOUND_LEVERAGE=200,
+        RANGE_BOUND_TIME_DECAY_EXIT_ENABLED=True,
+        RANGE_BOUND_TIME_DECAY_SECONDS=180,
+        RANGE_BOUND_TIME_DECAY_MIN_MFE_FEE_MULTIPLE=1.25,
+    )
+    market = _market(
+        100.0,
+        symbol="ETHUSDT",
+        range_position_180s=0.08,
+        taker_buy_ratio_10s=0.64,
+        taker_buy_ratio_30s=0.58,
+        book_imbalance_top=0.22,
+        depth_imbalance_top5=0.30,
+        higher_timeframe_context=_range_context(0.10, support_distance=0.030, resistance_distance=0.012),
+        higher_timeframe_context_age_seconds=60,
+        higher_timeframe_bias_side="neutral",
+        higher_timeframe_bias_strength=0.05,
+    )
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert (
+        broker.mark(
+            _market(
+                100.01,
+                return_60s_pct=-0.0002,
+                taker_buy_ratio_10s=0.44,
+                higher_timeframe_context=market.higher_timeframe_context,
+            ),
+            timestamp=opened_at + timedelta(seconds=181),
+        )
+        is None
+    )
+    assert broker.open_position is not None
+
+    trade = broker.mark(
+        _market(position.take_profit_price, symbol="ETHUSDT", higher_timeframe_context=market.higher_timeframe_context),
+        timestamp=opened_at + timedelta(seconds=900),
+    )
+
+    assert trade is not None
+    assert trade.exit_reason == "take_profit"
+
+
+def test_range_time_decay_tracks_counterfactual_delayed_target():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        STRATEGY_VARIANT="range_bound_support_resistance",
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        ENABLE_PRICE_STOP=False,
+        ENABLE_FAST_FAILURE_EXIT=False,
+        RANGE_BOUND_LEVERAGE=200,
+        RANGE_BOUND_TIME_DECAY_EXIT_ENABLED=True,
+        RANGE_BOUND_TIME_DECAY_SECONDS=180,
+        RANGE_BOUND_TIME_DECAY_MIN_MFE_FEE_MULTIPLE=1.25,
+        RANGE_BOUND_EXIT_COUNTERFACTUAL_ENABLED=True,
+    )
+    market = _market(
+        100.0,
+        symbol="ETHUSDT",
+        range_position_180s=0.08,
+        taker_buy_ratio_10s=0.64,
+        taker_buy_ratio_30s=0.58,
+        book_imbalance_top=0.22,
+        depth_imbalance_top5=0.30,
+        higher_timeframe_context=_range_context(0.10, support_distance=0.030, resistance_distance=0.012),
+        higher_timeframe_context_age_seconds=60,
+        higher_timeframe_bias_side="neutral",
+        higher_timeframe_bias_strength=0.05,
+    )
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    trade = broker.mark(
+        _market(
+            99.80,
+            return_60s_pct=-0.0002,
+            taker_buy_ratio_10s=0.44,
+            higher_timeframe_context=market.higher_timeframe_context,
+        ),
+        timestamp=opened_at + timedelta(seconds=181),
+    )
+
+    assert trade is not None
+    assert trade.exit_reason == "range_time_decay"
+    opened_events = broker.drain_audit_events()
+    assert opened_events[0][0] == "range_exit_counterfactual_open"
+
+    assert (
+        broker.mark(
+            _market(100.60, symbol="ETHUSDT", higher_timeframe_context=market.higher_timeframe_context),
+            timestamp=opened_at + timedelta(seconds=900),
+        )
+        is None
+    )
+    closed_events = broker.drain_audit_events()
+
+    assert closed_events[0][0] == "range_exit_counterfactual_close"
+    payload = closed_events[0][1]
+    assert payload["counterfactual_exit_reason"] == "target_after_time_decay"
+    assert payload["counterfactual_false_positive_exit"] is True
+    assert payload["counterfactual_net_pnl_usd"] > payload["actual_net_pnl_usd"]
+
+
 def test_paper_broker_closes_open_position_at_session_end_with_structural_fields():
     settings = Settings(
         MIN_CONFIDENCE=0.70,

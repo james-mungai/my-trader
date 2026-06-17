@@ -143,6 +143,30 @@ class Settings(BaseSettings):
         default=1.25,
         alias="RANGE_BOUND_TIME_DECAY_MIN_MFE_FEE_MULTIPLE",
     )
+    range_bound_time_decay_adverse_move_pct: float = Field(
+        default=0.0015,
+        alias="RANGE_BOUND_TIME_DECAY_ADVERSE_MOVE_PCT",
+    )
+    range_bound_time_decay_flow_adverse_move_pct: float = Field(
+        default=0.0005,
+        alias="RANGE_BOUND_TIME_DECAY_FLOW_ADVERSE_MOVE_PCT",
+    )
+    range_bound_exit_counterfactual_enabled: bool = Field(
+        default=True,
+        alias="RANGE_BOUND_EXIT_COUNTERFACTUAL_ENABLED",
+    )
+    range_bound_exit_counterfactual_horizon_seconds: int = Field(
+        default=21_600,
+        alias="RANGE_BOUND_EXIT_COUNTERFACTUAL_HORIZON_SECONDS",
+    )
+    range_bound_exit_counterfactual_cross_wallet_fraction: float = Field(
+        default=1.0,
+        alias="RANGE_BOUND_EXIT_COUNTERFACTUAL_CROSS_WALLET_FRACTION",
+    )
+    range_bound_exit_counterfactual_maintenance_margin_pct: float = Field(
+        default=0.004,
+        alias="RANGE_BOUND_EXIT_COUNTERFACTUAL_MAINTENANCE_MARGIN_PCT",
+    )
     stateful_target_feasibility_fraction: float = Field(default=0.60, alias="STATEFUL_TARGET_FEASIBILITY_FRACTION")
     stateful_adaptive_target_fraction: float = Field(default=0.50, alias="STATEFUL_ADAPTIVE_TARGET_FRACTION")
     stateful_adaptive_min_sequence_confidence: float = Field(default=0.93, alias="STATEFUL_ADAPTIVE_MIN_SEQUENCE_CONFIDENCE")
