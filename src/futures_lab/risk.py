@@ -84,6 +84,8 @@ class RiskEngine:
             blockers.append("paper live edge gate missing selected candidate")
             return blockers
         for blocker in selected.get("blockers") or []:
+            if self._is_soft_range_confirmation_blocker(selected, str(blocker)):
+                continue
             blockers.append(f"paper live selected candidate blocked: {blocker}")
 
         expected_ev_bps = self._float_value(selected.get("expected_ev_bps"))
@@ -181,6 +183,19 @@ class RiskEngine:
         if not isinstance(selected, dict):
             return False
         return selected.get("family") == "range_bound" or selected.get("strategy") == "range_bound_support_resistance"
+
+    def _is_soft_range_confirmation_blocker(self, selected: dict | None, blocker: str) -> bool:
+        if not self.settings.range_bound_soft_confirmation_blockers_enabled:
+            return False
+        if not self._is_range_bound_candidate(selected):
+            return False
+        return blocker in {
+            "higher_timeframe_hostile",
+            "range_htf_edge_not_confirmed",
+            "range_local_edge_not_confirmed",
+            "range_flow_not_confirmed",
+            "range_pressure_not_confirmed",
+        }
 
     @staticmethod
     def _float_value(value: object) -> float | None:

@@ -289,6 +289,71 @@ def test_baseline_candidate_can_select_when_microstructure_confirms():
     assert "baseline_microstructure_not_confirmed" not in candidate["blockers"]
 
 
+def test_range_baseline_softens_confirmation_blockers_when_enabled():
+    router = EdgeRouter(
+        Settings(
+            EDGE_ROUTER_MIN_EV_BPS=0.0,
+            EDGE_ROUTER_MIN_SCORE=0.70,
+            RANGE_BOUND_SOFT_CONFIRMATION_BLOCKERS_ENABLED=True,
+        )
+    )
+    baseline = BaselineCandidateInput(
+        side=Side.long,
+        score=0.90,
+        target_bps=50.0,
+        stop_bps=25.0,
+        strategy="range_bound_support_resistance",
+        family="range_bound",
+        prefer_selected=True,
+        use_micro_confirmation=False,
+        extra_blockers=[
+            "range_htf_edge_not_confirmed",
+            "range_local_edge_not_confirmed",
+            "range_flow_not_confirmed",
+            "range_pressure_not_confirmed",
+        ],
+        reasons=["range test"],
+    )
+
+    result = router.evaluate(_market(higher_timeframe_bias_side="short", higher_timeframe_bias_strength=0.80), baseline=baseline)
+    candidate = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "range_bound_support_resistance")
+
+    assert candidate["viable"] is True
+    assert candidate["blockers"] == []
+    assert result["selected"]["strategy"] == "range_bound_support_resistance"
+    assert result["selected_candidate"]["strategy"] == "range_bound_support_resistance"
+    assert any("soft_confirmation_blockers" in reason for reason in candidate["reasons"])
+
+
+def test_range_baseline_keeps_structural_blockers_hard_when_softening_enabled():
+    router = EdgeRouter(
+        Settings(
+            EDGE_ROUTER_MIN_EV_BPS=0.0,
+            EDGE_ROUTER_MIN_SCORE=0.70,
+            RANGE_BOUND_SOFT_CONFIRMATION_BLOCKERS_ENABLED=True,
+        )
+    )
+    baseline = BaselineCandidateInput(
+        side=Side.long,
+        score=0.90,
+        target_bps=50.0,
+        stop_bps=25.0,
+        strategy="range_bound_support_resistance",
+        family="range_bound",
+        prefer_selected=True,
+        use_micro_confirmation=False,
+        extra_blockers=["range_flow_not_confirmed", "range_structural_distance_too_wide"],
+        reasons=["range test"],
+    )
+
+    result = router.evaluate(_market(higher_timeframe_bias_side="short", higher_timeframe_bias_strength=0.80), baseline=baseline)
+    candidate = next(candidate for candidate in result["candidates"] if candidate["strategy"] == "range_bound_support_resistance")
+
+    assert candidate["viable"] is False
+    assert "range_structural_distance_too_wide" in candidate["blockers"]
+    assert "range_flow_not_confirmed" not in candidate["blockers"]
+
+
 def test_maker_reversion_candidates_are_disabled_by_default():
     router = EdgeRouter(Settings(EDGE_ROUTER_MIN_EV_BPS=0.0))
 

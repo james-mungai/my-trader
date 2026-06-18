@@ -145,10 +145,15 @@ class EdgeRouter:
             ],
             ev_loss_bps=baseline.ev_loss_bps,
         )
+        blockers: list[str] = []
         if not micro_gate["allowed"]:
-            return self._with_blockers(candidate, micro_gate["blockers"])
+            blockers.extend(micro_gate["blockers"])
         if baseline.extra_blockers:
-            return self._with_blockers(candidate, baseline.extra_blockers)
+            blockers.extend(baseline.extra_blockers)
+        if blockers:
+            candidate = self._with_blockers(candidate, blockers)
+        if baseline.family == "range_bound":
+            candidate = self._with_softened_range_confirmation_blockers(candidate)
         return candidate
 
     def _taker_impulse_candidate(self, market: MarketState, side: Side) -> EdgeCandidate:
@@ -565,6 +570,41 @@ class EdgeRouter:
             reasons=candidate.reasons,
             exit_plan=candidate.exit_plan,
         )
+
+    def _with_softened_range_confirmation_blockers(self, candidate: EdgeCandidate) -> EdgeCandidate:
+        if not self.settings.range_bound_soft_confirmation_blockers_enabled:
+            return candidate
+        soft_blockers = [blocker for blocker in candidate.blockers if self._is_soft_range_confirmation_blocker(blocker)]
+        if not soft_blockers:
+            return candidate
+        hard_blockers = [blocker for blocker in candidate.blockers if blocker not in soft_blockers]
+        return EdgeCandidate(
+            strategy=candidate.strategy,
+            family=candidate.family,
+            side=candidate.side,
+            entry_type=candidate.entry_type,
+            exit_type=candidate.exit_type,
+            target_bps=candidate.target_bps,
+            stop_bps=candidate.stop_bps,
+            max_hold_ms=candidate.max_hold_ms,
+            expected_cost_bps=candidate.expected_cost_bps,
+            score=candidate.score,
+            p_hit_tp_before_sl=candidate.p_hit_tp_before_sl,
+            expected_ev_bps=candidate.expected_ev_bps,
+            blockers=sorted(set(hard_blockers)),
+            reasons=candidate.reasons + [f"soft_confirmation_blockers={sorted(set(soft_blockers))}"],
+            exit_plan=candidate.exit_plan,
+        )
+
+    @staticmethod
+    def _is_soft_range_confirmation_blocker(blocker: str) -> bool:
+        return blocker in {
+            "higher_timeframe_hostile",
+            "range_htf_edge_not_confirmed",
+            "range_local_edge_not_confirmed",
+            "range_flow_not_confirmed",
+            "range_pressure_not_confirmed",
+        }
 
     def _default_exit_plan(self, max_hold_ms: int) -> dict:
         return {

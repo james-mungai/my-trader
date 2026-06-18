@@ -429,8 +429,11 @@ def test_daily_rollover_preserves_range_position_until_natural_close():
     assert broker.open_position is None
 
 
-def _edge_decision(target_move_pct: float, selected: dict) -> Decision:
+def _edge_decision(target_move_pct: float, selected: dict, extra_evidence: dict | None = None) -> Decision:
     price = 100.0
+    evidence = {"edge_router": {"selected": selected}}
+    if extra_evidence:
+        evidence.update(extra_evidence)
     return Decision(
         symbol="BTCUSDT",
         action=DecisionAction.propose_long,
@@ -445,7 +448,7 @@ def _edge_decision(target_move_pct: float, selected: dict) -> Decision:
         leverage=200,
         stake_usd=150,
         notional_usd=30_000,
-        evidence={"edge_router": {"selected": selected}},
+        evidence=evidence,
     )
 
 
@@ -500,6 +503,92 @@ def test_risk_allows_live_paper_when_selected_edge_is_strong_after_costs():
     verdict = RiskEngine(settings).evaluate(decision, _market(spread_bps=0.5), PaperBroker(settings).state())
 
     assert verdict.allowed
+
+
+def test_risk_softens_range_confirmation_blockers_but_keeps_structural_checks():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        PAPER_LIVE_MIN_TARGET_COST_MULTIPLE=2.5,
+        RANGE_BOUND_SOFT_CONFIRMATION_BLOCKERS_ENABLED=True,
+        RANGE_BOUND_PAPER_LIVE_MIN_EXPECTED_EV_BPS=1.0,
+        RANGE_BOUND_PAPER_LIVE_MIN_SCORE=0.70,
+        RANGE_BOUND_PAPER_LIVE_MIN_TP_PROBABILITY=0.70,
+        RANGE_BOUND_MAX_STRUCTURAL_ADVERSE_MOVE_PCT=0.035,
+        RANGE_BOUND_MAX_ACCOUNT_DRAWDOWN_FRACTION=0.65,
+    )
+    selected = {
+        "strategy": "range_bound_support_resistance",
+        "family": "range_bound",
+        "side": "long",
+        "score": 0.74,
+        "p_hit_tp_before_sl": 0.72,
+        "expected_ev_bps": 4.0,
+        "blockers": [
+            "higher_timeframe_hostile",
+            "range_htf_edge_not_confirmed",
+            "range_local_edge_not_confirmed",
+            "range_flow_not_confirmed",
+            "range_pressure_not_confirmed",
+        ],
+    }
+    decision = _edge_decision(
+        0.005,
+        selected,
+        extra_evidence={
+            "range_bound_structural_risk": {
+                "long": {
+                    "blockers": [],
+                    "structural_adverse_move_pct": 0.03,
+                    "account_drawdown_fraction": 0.60,
+                }
+            }
+        },
+    )
+
+    verdict = RiskEngine(settings).evaluate(decision, _market(spread_bps=0.5), PaperBroker(settings).state())
+
+    assert verdict.allowed
+
+
+def test_risk_does_not_soften_range_hard_candidate_blockers():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        RANGE_BOUND_SOFT_CONFIRMATION_BLOCKERS_ENABLED=True,
+        RANGE_BOUND_PAPER_LIVE_MIN_EXPECTED_EV_BPS=1.0,
+        RANGE_BOUND_PAPER_LIVE_MIN_SCORE=0.70,
+        RANGE_BOUND_PAPER_LIVE_MIN_TP_PROBABILITY=0.70,
+    )
+    selected = {
+        "strategy": "range_bound_support_resistance",
+        "family": "range_bound",
+        "side": "long",
+        "score": 0.74,
+        "p_hit_tp_before_sl": 0.72,
+        "expected_ev_bps": 4.0,
+        "blockers": ["range_flow_not_confirmed", "btc_microstructure_contradiction"],
+    }
+    decision = _edge_decision(
+        0.005,
+        selected,
+        extra_evidence={
+            "range_bound_structural_risk": {
+                "long": {
+                    "blockers": [],
+                    "structural_adverse_move_pct": 0.03,
+                    "account_drawdown_fraction": 0.60,
+                }
+            }
+        },
+    )
+
+    verdict = RiskEngine(settings).evaluate(decision, _market(spread_bps=0.5), PaperBroker(settings).state())
+
+    assert not verdict.allowed
+    joined = " ".join(verdict.blockers)
+    assert "btc_microstructure_contradiction" in joined
+    assert "range_flow_not_confirmed" not in joined
 
 
 def test_risk_blocks_live_paper_when_rolling_candidate_quality_is_weak():

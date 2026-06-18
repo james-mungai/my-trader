@@ -93,6 +93,10 @@ class Settings(BaseSettings):
         default=False,
         alias="RANGE_BOUND_ROLLING_EDGE_MONITOR_ENABLED",
     )
+    range_bound_soft_confirmation_blockers_enabled: bool = Field(
+        default=False,
+        alias="RANGE_BOUND_SOFT_CONFIRMATION_BLOCKERS_ENABLED",
+    )
     range_bound_structural_risk_enabled: bool = Field(default=True, alias="RANGE_BOUND_STRUCTURAL_RISK_ENABLED")
     range_bound_structural_exit_enabled: bool = Field(default=True, alias="RANGE_BOUND_STRUCTURAL_EXIT_ENABLED")
     range_bound_structural_buffer_pct: float = Field(default=0.0005, alias="RANGE_BOUND_STRUCTURAL_BUFFER_PCT")
