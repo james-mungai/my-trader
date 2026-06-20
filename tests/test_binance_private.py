@@ -492,3 +492,214 @@ def test_live_dust_round_trip_opens_reduce_only_closes_and_verifies_flat() -> No
     assert result["final_position"]["positionAmt"] == "0.000"
     assert result["open_orders_count"] == 0
     assert result["wallet_balance_delta_usd"] == "-0.02"
+
+
+def test_live_dust_open_places_one_order_and_leaves_position_open() -> None:
+    calls = []
+
+    class FakeClient(BinancePrivateClient):
+        account_probe_calls = 0
+
+        def live_preflight(self, *, symbol: str | None = None) -> dict:
+            return {
+                "ok": True,
+                "order_templates": {
+                    "buy_market_test": {"symbol": "ETHUSDT", "side": "BUY", "type": "MARKET", "quantity": "0.012"},
+                    "sell_market_test": {"symbol": "ETHUSDT", "side": "SELL", "type": "MARKET", "quantity": "0.012"},
+                },
+            }
+
+        def account_probe(self) -> dict:
+            self.account_probe_calls += 1
+            balance = "100.00000000" if self.account_probe_calls == 1 else "99.99000000"
+            return {"total_wallet_balance": balance, "total_available_balance": balance}
+
+        def place_market_order(
+            self,
+            side: str,
+            *,
+            symbol: str | None = None,
+            quantity: str,
+            reduce_only: bool = False,
+            client_order_prefix: str = "FL_LIVE",
+        ) -> dict:
+            calls.append(
+                {
+                    "side": side,
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "reduce_only": reduce_only,
+                    "client_order_prefix": client_order_prefix,
+                }
+            )
+            return {"orderId": 1, "symbol": symbol, "status": "FILLED", "side": side, "executedQty": quantity}
+
+        def _wait_for_position(self, symbol: str, *, expected_nonzero: bool, timeout_seconds: float) -> dict:
+            assert expected_nonzero is True
+            return {
+                "symbol": symbol,
+                "positionAmt": "0.012",
+                "entryPrice": "1726.50",
+                "markPrice": "1726.60",
+                "unRealizedProfit": "0.00100000",
+                "liquidationPrice": "1000",
+                "leverage": "150",
+                "marginType": "cross",
+                "isolatedMargin": "0.00000000",
+                "positionSide": "BOTH",
+            }
+
+        def open_orders(self, symbol: str | None = None) -> list[dict]:
+            return []
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=False,
+        )
+    )
+
+    result = client.live_dust_open("BUY")
+
+    assert result["ok"] is True
+    assert calls == [
+        {
+            "side": "BUY",
+            "symbol": "ETHUSDT",
+            "quantity": "0.012",
+            "reduce_only": False,
+            "client_order_prefix": "FL_DUST_OPEN_ONLY",
+        }
+    ]
+    assert result["position_after_open"]["positionAmt"] == "0.012"
+
+
+def test_flatten_position_is_noop_when_already_flat() -> None:
+    class FakeClient(BinancePrivateClient):
+        def account_probe(self) -> dict:
+            return {"total_wallet_balance": "100.00000000", "total_available_balance": "100.00000000"}
+
+        def _first_position_risk(self, symbol: str) -> dict:
+            return {
+                "symbol": symbol,
+                "positionAmt": "0.000",
+                "entryPrice": "0.0",
+                "markPrice": "1726.50",
+                "unRealizedProfit": "0.00000000",
+                "liquidationPrice": "0",
+                "leverage": "150",
+                "marginType": "cross",
+                "isolatedMargin": "0.00000000",
+                "positionSide": "BOTH",
+            }
+
+        def open_orders(self, symbol: str | None = None) -> list[dict]:
+            return []
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=False,
+        )
+    )
+
+    result = client.flatten_position()
+
+    assert result["ok"] is True
+    assert result["live_order_placed"] is False
+    assert result["message"] == "already_flat"
+    assert result["final_position"]["positionAmt"] == "0.000"
+
+
+def test_flatten_position_closes_existing_position_reduce_only() -> None:
+    calls = []
+
+    class FakeClient(BinancePrivateClient):
+        account_probe_calls = 0
+
+        def account_probe(self) -> dict:
+            self.account_probe_calls += 1
+            balance = "100.00000000" if self.account_probe_calls == 1 else "99.99000000"
+            return {"total_wallet_balance": balance, "total_available_balance": balance}
+
+        def _first_position_risk(self, symbol: str) -> dict:
+            return {
+                "symbol": symbol,
+                "positionAmt": "-0.012",
+                "entryPrice": "1726.50",
+                "markPrice": "1726.60",
+                "unRealizedProfit": "-0.00100000",
+                "liquidationPrice": "10000",
+                "leverage": "150",
+                "marginType": "cross",
+                "isolatedMargin": "0.00000000",
+                "positionSide": "BOTH",
+            }
+
+        def place_market_order(
+            self,
+            side: str,
+            *,
+            symbol: str | None = None,
+            quantity: str,
+            reduce_only: bool = False,
+            client_order_prefix: str = "FL_LIVE",
+        ) -> dict:
+            calls.append(
+                {
+                    "side": side,
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "reduce_only": reduce_only,
+                    "client_order_prefix": client_order_prefix,
+                }
+            )
+            return {"orderId": 1, "symbol": symbol, "status": "FILLED", "side": side, "executedQty": quantity}
+
+        def _wait_for_position(self, symbol: str, *, expected_nonzero: bool, timeout_seconds: float) -> dict:
+            assert expected_nonzero is False
+            return {
+                "symbol": symbol,
+                "positionAmt": "0.000",
+                "entryPrice": "0.0",
+                "markPrice": "1726.60",
+                "unRealizedProfit": "0.00000000",
+                "liquidationPrice": "0",
+                "leverage": "150",
+                "marginType": "cross",
+                "isolatedMargin": "0.00000000",
+                "positionSide": "BOTH",
+            }
+
+        def open_orders(self, symbol: str | None = None) -> list[dict]:
+            return []
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=False,
+        )
+    )
+
+    result = client.flatten_position()
+
+    assert result["ok"] is True
+    assert calls == [
+        {
+            "side": "BUY",
+            "symbol": "ETHUSDT",
+            "quantity": "0.012",
+            "reduce_only": True,
+            "client_order_prefix": "FL_FLATTEN",
+        }
+    ]
+    assert result["final_position"]["positionAmt"] == "0.000"

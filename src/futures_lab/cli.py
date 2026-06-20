@@ -209,6 +209,28 @@ def binance_dust_round_trip(side: str, symbol: str | None, confirm_live_order: b
     print(json.dumps(result, indent=2, default=str))
 
 
+def binance_dust_open(side: str, symbol: str | None, confirm_live_order: bool) -> None:
+    if not confirm_live_order:
+        raise SystemExit("Refusing to place a live order without --confirm-live-order.")
+    settings = Settings()
+    try:
+        result = BinancePrivateClient(settings).live_dust_open(side, symbol=symbol)
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, indent=2, default=str))
+
+
+def binance_flatten_position(symbol: str | None, confirm_live_order: bool) -> None:
+    if not confirm_live_order:
+        raise SystemExit("Refusing to place a live order without --confirm-live-order.")
+    settings = Settings()
+    try:
+        result = BinancePrivateClient(settings).flatten_position(symbol=symbol)
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, indent=2, default=str))
+
+
 async def latency_probe(
     seconds: int,
     profile: str,
@@ -300,6 +322,21 @@ def main() -> None:
     dust_parser.add_argument("--symbol", default=None)
     dust_parser.add_argument("--confirm-live-order", action="store_true", help="Required. This command places real orders.")
 
+    dust_open_parser = sub.add_parser(
+        "binance-dust-open",
+        help="Place one tiny live Binance USD-M MARKET order and leave it open for a flatten drill.",
+    )
+    dust_open_parser.add_argument("--side", choices=["BUY", "SELL"], required=True)
+    dust_open_parser.add_argument("--symbol", default=None)
+    dust_open_parser.add_argument("--confirm-live-order", action="store_true", help="Required. This command places a real order.")
+
+    flatten_parser = sub.add_parser(
+        "binance-flatten-position",
+        help="Flatten the current Binance USD-M position with one reduce-only MARKET order.",
+    )
+    flatten_parser.add_argument("--symbol", default=None)
+    flatten_parser.add_argument("--confirm-live-order", action="store_true", help="Required. This command can place a real reduce-only order.")
+
     latency_parser = sub.add_parser("latency-probe", help="Measure Binance WebSocket event lag without running strategy logic.")
     latency_parser.add_argument("--seconds", type=int, default=300)
     latency_parser.add_argument(
@@ -373,6 +410,10 @@ def main() -> None:
         binance_order_test(args.side, args.symbol, args.notional_usd)
     elif args.command == "binance-dust-round-trip":
         binance_dust_round_trip(args.side, args.symbol, args.confirm_live_order)
+    elif args.command == "binance-dust-open":
+        binance_dust_open(args.side, args.symbol, args.confirm_live_order)
+    elif args.command == "binance-flatten-position":
+        binance_flatten_position(args.symbol, args.confirm_live_order)
     elif args.command == "latency-probe":
         if args.list_profiles:
             settings = Settings()

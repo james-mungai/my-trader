@@ -210,10 +210,7 @@ class BinancePrivateClient:
         return payload
 
     def live_dust_round_trip(self, side: str, *, symbol: str | None = None) -> dict[str, Any]:
-        if not self.settings.live_trading_enabled:
-            raise BinancePrivateError("LIVE_TRADING_ENABLED must be true before placing live orders.")
-        if self.settings.live_dry_run:
-            raise BinancePrivateError("LIVE_DRY_RUN must be false before placing live orders.")
+        self._require_live_order_settings()
         symbol = (symbol or self.settings.symbol).strip().upper()
         side = side.strip().upper()
         if side not in {"BUY", "SELL"}:
@@ -290,6 +287,100 @@ class BinancePrivateClient:
             "wallet_balance_delta_usd": _format_decimal(after_wallet - before_wallet),
             "available_balance_after": after_account.get("total_available_balance"),
             "close_attempt_errors": close_attempt_errors,
+        }
+
+    def live_dust_open(self, side: str, *, symbol: str | None = None) -> dict[str, Any]:
+        self._require_live_order_settings()
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        side = side.strip().upper()
+        if side not in {"BUY", "SELL"}:
+            raise BinancePrivateError("side must be BUY or SELL.")
+        preflight = self.live_preflight(symbol=symbol)
+        if not preflight.get("ok"):
+            raise BinancePrivateError(f"Live preflight failed: {preflight.get('hard_failures')}")
+        template_key = "buy_market_test" if side == "BUY" else "sell_market_test"
+        order_template = preflight["order_templates"][template_key]
+        before_account = self.account_probe()
+        opened_order = self.place_market_order(
+            side,
+            symbol=symbol,
+            quantity=order_template["quantity"],
+            reduce_only=False,
+            client_order_prefix="FL_DUST_OPEN_ONLY",
+        )
+        position_after_open = self._wait_for_position(symbol, expected_nonzero=True, timeout_seconds=10.0)
+        after_account = self.account_probe()
+        open_orders = self.open_orders(symbol)
+        if open_orders:
+            raise BinancePrivateError(f"Dust open left open orders: {open_orders}")
+        before_wallet = Decimal(str(before_account.get("total_wallet_balance") or "0"))
+        after_wallet = Decimal(str(after_account.get("total_wallet_balance") or "0"))
+        return {
+            "ok": True,
+            "live_order_placed": True,
+            "submitted_to_matching_engine": True,
+            "symbol": symbol,
+            "side": side,
+            "order_template": order_template,
+            "opened_order": _summarize_order_response(opened_order),
+            "position_after_open": position_after_open,
+            "open_orders_count": len(open_orders),
+            "wallet_balance_before": before_account.get("total_wallet_balance"),
+            "wallet_balance_after": after_account.get("total_wallet_balance"),
+            "wallet_balance_delta_usd": _format_decimal(after_wallet - before_wallet),
+            "available_balance_after": after_account.get("total_available_balance"),
+        }
+
+    def flatten_position(self, *, symbol: str | None = None) -> dict[str, Any]:
+        self._require_live_order_settings()
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        before_account = self.account_probe()
+        position_before = self._first_position_risk(symbol)
+        if not _nonzero_number(position_before.get("positionAmt")):
+            return {
+                "ok": True,
+                "live_order_placed": False,
+                "submitted_to_matching_engine": False,
+                "symbol": symbol,
+                "message": "already_flat",
+                "position_before": _summarize_position_risk(position_before),
+                "final_position": _summarize_position_risk(position_before),
+                "open_orders_count": len(self.open_orders(symbol)),
+                "wallet_balance_before": before_account.get("total_wallet_balance"),
+                "wallet_balance_after": before_account.get("total_wallet_balance"),
+                "wallet_balance_delta_usd": "0",
+                "available_balance_after": before_account.get("total_available_balance"),
+            }
+        close_side, close_quantity = _close_order_from_position(position_before)
+        close_order = self.place_market_order(
+            close_side,
+            symbol=symbol,
+            quantity=close_quantity,
+            reduce_only=True,
+            client_order_prefix="FL_FLATTEN",
+        )
+        final_position = self._wait_for_position(symbol, expected_nonzero=False, timeout_seconds=10.0)
+        after_account = self.account_probe()
+        open_orders = self.open_orders(symbol)
+        final_position_amt = Decimal(str(final_position.get("positionAmt") or "0"))
+        if final_position_amt != Decimal("0"):
+            raise BinancePrivateError(f"Flatten did not end flat: {final_position}")
+        before_wallet = Decimal(str(before_account.get("total_wallet_balance") or "0"))
+        after_wallet = Decimal(str(after_account.get("total_wallet_balance") or "0"))
+        return {
+            "ok": True,
+            "live_order_placed": True,
+            "submitted_to_matching_engine": True,
+            "symbol": symbol,
+            "position_before": _summarize_position_risk(position_before),
+            "close_order": _summarize_order_response(close_order),
+            "final_position": final_position,
+            "open_orders_count": len(open_orders),
+            "open_orders": [_summarize_open_order(item) for item in open_orders],
+            "wallet_balance_before": before_account.get("total_wallet_balance"),
+            "wallet_balance_after": after_account.get("total_wallet_balance"),
+            "wallet_balance_delta_usd": _format_decimal(after_wallet - before_wallet),
+            "available_balance_after": after_account.get("total_available_balance"),
         }
 
     def live_preflight(self, *, symbol: str | None = None) -> dict[str, Any]:
@@ -385,6 +476,12 @@ class BinancePrivateClient:
             "hard_failures": hard_failures,
             "warnings": warnings,
         }
+
+    def _require_live_order_settings(self) -> None:
+        if not self.settings.live_trading_enabled:
+            raise BinancePrivateError("LIVE_TRADING_ENABLED must be true before placing live orders.")
+        if self.settings.live_dry_run:
+            raise BinancePrivateError("LIVE_DRY_RUN must be false before placing live orders.")
 
     def _first_position_risk(self, symbol: str) -> dict[str, Any]:
         rows = self.position_risk(symbol)
