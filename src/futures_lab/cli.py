@@ -177,6 +177,19 @@ def binance_account_probe() -> None:
         raise SystemExit(str(exc)) from exc
 
 
+def binance_order_test(side: str, symbol: str | None, notional_usd: float | None) -> None:
+    settings = Settings()
+    try:
+        result = BinancePrivateClient(settings).market_order_test_probe(
+            side,
+            symbol=symbol,
+            target_notional_usd=notional_usd,
+        )
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, indent=2, default=str))
+
+
 async def latency_probe(
     seconds: int,
     profile: str,
@@ -240,6 +253,18 @@ def main() -> None:
     sub.add_parser(
         "binance-account-probe",
         help="Read-only signed Binance USD-M Futures account/auth probe. Does not place or modify orders.",
+    )
+    order_test_parser = sub.add_parser(
+        "binance-order-test",
+        help="Validate a Binance USD-M Futures MARKET order using /fapi/v1/order/test. Places nothing.",
+    )
+    order_test_parser.add_argument("--side", choices=["BUY", "SELL"], required=True)
+    order_test_parser.add_argument("--symbol", default=None)
+    order_test_parser.add_argument(
+        "--notional-usd",
+        type=float,
+        default=None,
+        help="Target notional before filter rounding. Must not exceed LIVE_MAX_NOTIONAL_USD.",
     )
 
     latency_parser = sub.add_parser("latency-probe", help="Measure Binance WebSocket event lag without running strategy logic.")
@@ -309,6 +334,8 @@ def main() -> None:
         )
     elif args.command == "binance-account-probe":
         binance_account_probe()
+    elif args.command == "binance-order-test":
+        binance_order_test(args.side, args.symbol, args.notional_usd)
     elif args.command == "latency-probe":
         if args.list_profiles:
             settings = Settings()

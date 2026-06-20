@@ -91,3 +91,121 @@ def test_account_probe_redacts_credentials_and_filters_positions() -> None:
     assert {position["symbol"] for position in payload["positions"]} == {"ETHUSDT", "BTCUSDT"}
     assert "live-key" not in str(payload)
     assert "live-secret" not in str(payload)
+
+
+def test_market_order_test_uses_safe_quantity_under_max_notional() -> None:
+    class FakeClient(BinancePrivateClient):
+        def exchange_info(self) -> dict:
+            return {
+                "symbols": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "filters": [
+                            {"filterType": "MARKET_LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                            {"filterType": "MIN_NOTIONAL", "notional": "20"},
+                        ],
+                    }
+                ]
+            }
+
+        def ticker_price(self, symbol: str | None = None):
+            from decimal import Decimal
+
+            return Decimal("1722.47")
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_DUST_TEST_NOTIONAL_USD=22,
+            LIVE_MAX_NOTIONAL_USD=25,
+        )
+    )
+
+    order = client.build_market_order_test("BUY")
+
+    assert order["quantity"] == "0.012"
+    assert float(order["estimated_notional_usd"]) >= 20
+    assert float(order["estimated_notional_usd"]) <= 25
+
+
+def test_market_order_test_refuses_quantity_that_cannot_clear_min_below_cap() -> None:
+    class FakeClient(BinancePrivateClient):
+        def exchange_info(self) -> dict:
+            return {
+                "symbols": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "filters": [
+                            {"filterType": "MARKET_LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                            {"filterType": "MIN_NOTIONAL", "notional": "20"},
+                        ],
+                    }
+                ]
+            }
+
+        def ticker_price(self, symbol: str | None = None):
+            from decimal import Decimal
+
+            return Decimal("1722.47")
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_DUST_TEST_NOTIONAL_USD=22,
+            LIVE_MAX_NOTIONAL_USD=19,
+        )
+    )
+
+    with pytest.raises(BinancePrivateError, match="below required minimum"):
+        client.build_market_order_test("BUY")
+
+
+def test_market_order_test_probe_calls_binance_test_endpoint_only() -> None:
+    calls = []
+
+    class FakeClient(BinancePrivateClient):
+        def exchange_info(self) -> dict:
+            return {
+                "symbols": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "filters": [
+                            {"filterType": "MARKET_LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                            {"filterType": "MIN_NOTIONAL", "notional": "20"},
+                        ],
+                    }
+                ]
+            }
+
+        def ticker_price(self, symbol: str | None = None):
+            from decimal import Decimal
+
+            return Decimal("1722.47")
+
+        def _request_json(self, method: str, path: str, *, signed: bool, params: dict | None = None):
+            calls.append((method, path, signed, params))
+            return {}
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_DUST_TEST_NOTIONAL_USD=22,
+            LIVE_MAX_NOTIONAL_USD=25,
+        )
+    )
+
+    result = client.market_order_test_probe("SELL")
+
+    assert result["ok"] is True
+    assert result["submitted_to_matching_engine"] is False
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == "/fapi/v1/order/test"
+    assert calls[0][2] is True
+    assert calls[0][3]["side"] == "SELL"
+    assert calls[0][3]["quantity"] == "0.012"

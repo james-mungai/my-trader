@@ -417,6 +417,15 @@ class Settings(BaseSettings):
 
     api_token: str | None = Field(default=None, alias="API_TOKEN")
 
+    live_trading_enabled: bool = Field(default=False, alias="LIVE_TRADING_ENABLED")
+    live_dry_run: bool = Field(default=True, alias="LIVE_DRY_RUN")
+    live_min_notional_usd: float = Field(default=20.0, alias="LIVE_MIN_NOTIONAL_USD")
+    live_max_notional_usd: float = Field(default=25.0, alias="LIVE_MAX_NOTIONAL_USD")
+    live_dust_test_notional_usd: float = Field(default=22.0, alias="LIVE_DUST_TEST_NOTIONAL_USD")
+    live_max_open_positions: int = Field(default=1, alias="LIVE_MAX_OPEN_POSITIONS")
+    live_max_trades_per_day: int = Field(default=3, alias="LIVE_MAX_TRADES_PER_DAY")
+    live_daily_max_loss_usd: float = Field(default=2.0, alias="LIVE_DAILY_MAX_LOSS_USD")
+
     binance_api_key: str | None = Field(default=None, alias="BINANCE_API_KEY")
     binance_api_secret: str | None = Field(default=None, alias="BINANCE_API_SECRET")
     binance_demo_api_key: str | None = Field(default=None, alias="BINANCE_DEMO_API_KEY")

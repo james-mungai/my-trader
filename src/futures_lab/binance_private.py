@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Any
 
 from futures_lab.config import Settings
@@ -67,6 +68,98 @@ class BinancePrivateClient:
             raise BinancePrivateError(f"Unexpected Binance balance payload: {payload}")
         return payload
 
+    def exchange_info(self) -> dict[str, Any]:
+        payload = self._request_json("GET", "/fapi/v1/exchangeInfo", signed=False)
+        if not isinstance(payload, dict):
+            raise BinancePrivateError(f"Unexpected Binance exchangeInfo payload: {payload}")
+        return payload
+
+    def ticker_price(self, symbol: str | None = None) -> Decimal:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        payload = self._request_json("GET", "/fapi/v1/ticker/price", signed=False, params={"symbol": symbol})
+        try:
+            return Decimal(str(payload["price"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BinancePrivateError(f"Unexpected Binance ticker payload: {payload}") from exc
+
+    def symbol_info(self, symbol: str | None = None) -> dict[str, Any]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        symbols = self.exchange_info().get("symbols") or []
+        for item in symbols:
+            if item.get("symbol") == symbol:
+                return item
+        raise BinancePrivateError(f"Symbol {symbol} not found in Binance exchangeInfo.")
+
+    def build_market_order_test(self, side: str, *, symbol: str | None = None, target_notional_usd: float | None = None) -> dict[str, Any]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        side = side.strip().upper()
+        if side not in {"BUY", "SELL"}:
+            raise BinancePrivateError("side must be BUY or SELL.")
+        info = self.symbol_info(symbol)
+        filters = {item.get("filterType"): item for item in info.get("filters", [])}
+        lot_filter = filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE") or {}
+        min_notional_filter = filters.get("MIN_NOTIONAL") or {}
+        step_size = Decimal(str(lot_filter.get("stepSize") or "0.001"))
+        min_qty = Decimal(str(lot_filter.get("minQty") or "0"))
+        min_exchange_notional = Decimal(str(min_notional_filter.get("notional") or self.settings.live_min_notional_usd))
+        min_notional = max(Decimal(str(self.settings.live_min_notional_usd)), min_exchange_notional)
+        max_notional = Decimal(str(self.settings.live_max_notional_usd))
+        target_notional = Decimal(str(target_notional_usd if target_notional_usd is not None else self.settings.live_dust_test_notional_usd))
+        if max_notional < min_notional:
+            raise BinancePrivateError(f"LIVE_MAX_NOTIONAL_USD {max_notional} is below required minimum notional {min_notional}.")
+        if target_notional > max_notional:
+            raise BinancePrivateError(f"target notional {target_notional} exceeds max notional {max_notional}.")
+        price = self.ticker_price(symbol)
+        quantity = _floor_to_step(target_notional / price, step_size)
+        if quantity < min_qty or quantity * price < min_notional:
+            quantity = _ceil_to_step(max(min_qty, min_notional / price), step_size)
+        estimated_notional = quantity * price
+        if estimated_notional < min_notional:
+            raise BinancePrivateError(
+                f"Calculated notional {estimated_notional:.8f} is below required minimum notional {min_notional:.8f}."
+            )
+        if estimated_notional > max_notional:
+            raise BinancePrivateError(
+                f"Calculated notional {estimated_notional:.8f} exceeds LIVE_MAX_NOTIONAL_USD {max_notional:.8f}."
+            )
+        return {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": _format_decimal(quantity),
+            "estimated_price": _format_decimal(price),
+            "estimated_notional_usd": _format_decimal(estimated_notional),
+            "min_notional_usd": _format_decimal(min_notional),
+            "max_notional_usd": _format_decimal(max_notional),
+            "step_size": _format_decimal(step_size),
+            "min_qty": _format_decimal(min_qty),
+        }
+
+    def market_order_test_probe(
+        self,
+        side: str,
+        *,
+        symbol: str | None = None,
+        target_notional_usd: float | None = None,
+    ) -> dict[str, Any]:
+        order = self.build_market_order_test(side, symbol=symbol, target_notional_usd=target_notional_usd)
+        params = {
+            "symbol": order["symbol"],
+            "side": order["side"],
+            "type": order["type"],
+            "quantity": order["quantity"],
+            "newClientOrderId": f"FL_TEST_{int(time.time() * 1000)}",
+        }
+        response = self._request_json("POST", "/fapi/v1/order/test", signed=True, params=params)
+        return {
+            "ok": True,
+            "dry_run": True,
+            "submitted_to_matching_engine": False,
+            "endpoint": "/fapi/v1/order/test",
+            "order": order,
+            "response": response,
+        }
+
     def account_probe(self) -> dict[str, Any]:
         server_time = self.server_time_ms()
         local_time = int(time.time() * 1000)
@@ -115,8 +208,8 @@ class BinancePrivateClient:
             "positions": positions,
         }
 
-    def _request_json(self, method: str, path: str, *, signed: bool) -> Any:
-        query: dict[str, str | int] = {}
+    def _request_json(self, method: str, path: str, *, signed: bool, params: dict[str, Any] | None = None) -> Any:
+        query: dict[str, Any] = dict(params or {})
         if signed:
             query["timestamp"] = int(time.time() * 1000)
             query["recvWindow"] = 5000
@@ -135,7 +228,8 @@ class BinancePrivateClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
+                body = response.read().decode("utf-8")
+                return json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             raise BinancePrivateError(f"Binance HTTP {exc.code} for {path}: {_redact(body)}") from exc
@@ -143,9 +237,28 @@ class BinancePrivateClient:
             raise BinancePrivateError(f"Binance request failed for {path}: {exc.reason}") from exc
 
 
-def _sign_query(query: dict[str, str | int], secret: str) -> str:
+def _sign_query(query: dict[str, Any], secret: str) -> str:
     payload = urllib.parse.urlencode(query)
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _floor_to_step(value: Decimal, step: Decimal) -> Decimal:
+    if step <= 0:
+        return value
+    return (value / step).to_integral_value(rounding=ROUND_FLOOR) * step
+
+
+def _ceil_to_step(value: Decimal, step: Decimal) -> Decimal:
+    if step <= 0:
+        return value
+    return (value / step).to_integral_value(rounding=ROUND_CEILING) * step
+
+
+def _format_decimal(value: Decimal) -> str:
+    text = format(value.normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
 
 
 def _nonzero_number(value: object) -> bool:
