@@ -5,6 +5,7 @@ import signal
 from datetime import datetime, timedelta, timezone
 
 from futures_lab.audit import AuditLog
+from futures_lab.binance_private import BinancePrivateClient, BinancePrivateError
 from futures_lab.config import Settings
 from futures_lab.data_ops import (
     compress_raw,
@@ -168,6 +169,14 @@ def readiness_report(
     print(json.dumps(report.model_dump(), indent=2, default=str))
 
 
+def binance_account_probe() -> None:
+    settings = Settings()
+    try:
+        print(json.dumps(BinancePrivateClient(settings).account_probe(), indent=2, default=str))
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
 async def latency_probe(
     seconds: int,
     profile: str,
@@ -227,6 +236,11 @@ def main() -> None:
     readiness_parser.add_argument("--include-depth", action="store_true")
     readiness_parser.add_argument("--book-ticker-min-interval-ms", type=int, default=100)
     readiness_parser.add_argument("--flatten-at-end", action="store_true")
+
+    sub.add_parser(
+        "binance-account-probe",
+        help="Read-only signed Binance USD-M Futures account/auth probe. Does not place or modify orders.",
+    )
 
     latency_parser = sub.add_parser("latency-probe", help="Measure Binance WebSocket event lag without running strategy logic.")
     latency_parser.add_argument("--seconds", type=int, default=300)
@@ -293,6 +307,8 @@ def main() -> None:
             book_ticker_min_interval_ms=args.book_ticker_min_interval_ms,
             flatten_at_end=args.flatten_at_end,
         )
+    elif args.command == "binance-account-probe":
+        binance_account_probe()
     elif args.command == "latency-probe":
         if args.list_profiles:
             settings = Settings()
