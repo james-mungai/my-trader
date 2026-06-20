@@ -425,6 +425,10 @@ class Settings(BaseSettings):
     live_max_open_positions: int = Field(default=1, alias="LIVE_MAX_OPEN_POSITIONS")
     live_max_trades_per_day: int = Field(default=3, alias="LIVE_MAX_TRADES_PER_DAY")
     live_daily_max_loss_usd: float = Field(default=2.0, alias="LIVE_DAILY_MAX_LOSS_USD")
+    live_canary_max_notional_usd: float = Field(default=25.0, alias="LIVE_CANARY_MAX_NOTIONAL_USD")
+    live_canary_max_loss_usd: float = Field(default=2.0, alias="LIVE_CANARY_MAX_LOSS_USD")
+    live_canary_intratrade_max_loss_usd: float = Field(default=0.0, alias="LIVE_CANARY_INTRATRADE_MAX_LOSS_USD")
+    live_canary_position_check_seconds: float = Field(default=15.0, alias="LIVE_CANARY_POSITION_CHECK_SECONDS")
 
     binance_api_key: str | None = Field(default=None, alias="BINANCE_API_KEY")
     binance_api_secret: str | None = Field(default=None, alias="BINANCE_API_SECRET")

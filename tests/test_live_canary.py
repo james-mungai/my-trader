@@ -38,6 +38,20 @@ def test_validate_live_canary_settings_accepts_tiny_live_config() -> None:
     validate_live_canary_settings(_settings(), max_trades=1)
 
 
+def test_validate_live_canary_settings_accepts_raised_canary_limits() -> None:
+    validate_live_canary_settings(
+        _settings(
+            LIVE_MAX_NOTIONAL_USD=100,
+            LIVE_DUST_TEST_NOTIONAL_USD=95,
+            LIVE_DAILY_MAX_LOSS_USD=8,
+            LIVE_CANARY_MAX_NOTIONAL_USD=100,
+            LIVE_CANARY_MAX_LOSS_USD=8,
+            LIVE_CANARY_INTRATRADE_MAX_LOSS_USD=6,
+        ),
+        max_trades=2,
+    )
+
+
 def test_validate_live_canary_settings_rejects_unsafe_live_config() -> None:
     with pytest.raises(BinancePrivateError, match="LIVE_TRADING_ENABLED"):
         validate_live_canary_settings(_settings(LIVE_TRADING_ENABLED=False), max_trades=1)
@@ -47,5 +61,7 @@ def test_validate_live_canary_settings_rejects_unsafe_live_config() -> None:
         validate_live_canary_settings(_settings(LIVE_MAX_NOTIONAL_USD=26), max_trades=1)
     with pytest.raises(BinancePrivateError, match="LIVE_DAILY_MAX_LOSS_USD"):
         validate_live_canary_settings(_settings(LIVE_DAILY_MAX_LOSS_USD=3), max_trades=1)
+    with pytest.raises(BinancePrivateError, match="LIVE_CANARY_POSITION_CHECK_SECONDS"):
+        validate_live_canary_settings(_settings(LIVE_CANARY_POSITION_CHECK_SECONDS=0), max_trades=1)
     with pytest.raises(BinancePrivateError, match="LIVE_MAX_TRADES_PER_DAY"):
         validate_live_canary_settings(_settings(LIVE_MAX_TRADES_PER_DAY=1), max_trades=2)

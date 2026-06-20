@@ -68,10 +68,22 @@ def validate_live_canary_settings(settings: Settings, max_trades: int) -> None:
         )
     if settings.live_max_open_positions != 1:
         raise BinancePrivateError("LIVE_MAX_OPEN_POSITIONS must be 1 for live canary.")
-    if settings.live_max_notional_usd > 25:
-        raise BinancePrivateError("LIVE_MAX_NOTIONAL_USD must be <= 25 for live canary.")
-    if settings.live_daily_max_loss_usd > 2:
-        raise BinancePrivateError("LIVE_DAILY_MAX_LOSS_USD must be <= 2 for live canary.")
+    if settings.live_canary_max_notional_usd <= 0:
+        raise BinancePrivateError("LIVE_CANARY_MAX_NOTIONAL_USD must be positive.")
+    if settings.live_canary_max_loss_usd <= 0:
+        raise BinancePrivateError("LIVE_CANARY_MAX_LOSS_USD must be positive.")
+    if settings.live_max_notional_usd > settings.live_canary_max_notional_usd:
+        raise BinancePrivateError(
+            f"LIVE_MAX_NOTIONAL_USD {settings.live_max_notional_usd} exceeds "
+            f"LIVE_CANARY_MAX_NOTIONAL_USD {settings.live_canary_max_notional_usd}."
+        )
+    if settings.live_daily_max_loss_usd > settings.live_canary_max_loss_usd:
+        raise BinancePrivateError(
+            f"LIVE_DAILY_MAX_LOSS_USD {settings.live_daily_max_loss_usd} exceeds "
+            f"LIVE_CANARY_MAX_LOSS_USD {settings.live_canary_max_loss_usd}."
+        )
+    if settings.live_canary_position_check_seconds <= 0:
+        raise BinancePrivateError("LIVE_CANARY_POSITION_CHECK_SECONDS must be positive.")
 
 
 def live_order_side_from_decision(decision: Decision) -> str | None:
@@ -108,6 +120,7 @@ async def run_live_canary(
     live_position_open = False
     deadline = monotonic() + max(0, seconds)
     interval = max(0.1, settings.decision_interval_ms / 1000)
+    next_position_check = monotonic()
 
     runtime.recorder.start()
     runtime.context.start()
@@ -135,6 +148,21 @@ async def run_live_canary(
                 risk,
                 decision_latency_ms=(monotonic() - loop_started) * 1000,
             )
+
+            if live_position_open and monotonic() >= next_position_check:
+                position_check = _live_position_loss_check(client, symbol, settings.live_canary_intratrade_max_loss_usd)
+                next_position_check = monotonic() + settings.live_canary_position_check_seconds
+                if position_check is not None:
+                    runtime.audit.write("live_canary_position_check", position_check)
+                    summary.events.append({"event": "live_position_check", "payload": position_check})
+                    if position_check["loss_limit_hit"]:
+                        flatten = client.flatten_position(symbol=symbol)
+                        live_position_open = False
+                        summary.live_closes += int(bool(flatten.get("live_order_placed")))
+                        summary.events.append({"event": "live_flatten_on_intratrade_loss", "payload": flatten})
+                        runtime.audit.write("live_canary_flatten", flatten)
+                        summary.stop_reason = "live_intratrade_max_loss_hit"
+                        break
 
             closed = runtime.paper.mark(market)
             if closed is not None:
@@ -271,3 +299,25 @@ def _wallet_loss_exceeded(start: object, current: object, max_loss_usd: float) -
     if current is None:
         return False
     return Decimal(str(current)) - Decimal(str(start)) <= -abs(Decimal(str(max_loss_usd)))
+
+
+def _live_position_loss_check(
+    client: BinancePrivateClient,
+    symbol: str,
+    max_intratrade_loss_usd: float,
+) -> dict[str, Any] | None:
+    if max_intratrade_loss_usd <= 0:
+        return None
+    position = next((item for item in client.position_risk(symbol) if item.get("symbol") == symbol), None)
+    if not position:
+        return None
+    unrealized = Decimal(str(position.get("unRealizedProfit") or "0"))
+    return {
+        "symbol": symbol,
+        "positionAmt": position.get("positionAmt"),
+        "entryPrice": position.get("entryPrice"),
+        "markPrice": position.get("markPrice"),
+        "unRealizedProfit": position.get("unRealizedProfit"),
+        "max_intratrade_loss_usd": str(max_intratrade_loss_usd),
+        "loss_limit_hit": unrealized <= -abs(Decimal(str(max_intratrade_loss_usd))),
+    }
