@@ -68,6 +68,27 @@ class BinancePrivateClient:
             raise BinancePrivateError(f"Unexpected Binance balance payload: {payload}")
         return payload
 
+    def open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        payload = self._request_json("GET", "/fapi/v1/openOrders", signed=True, params={"symbol": symbol})
+        if not isinstance(payload, list):
+            raise BinancePrivateError(f"Unexpected Binance openOrders payload: {payload}")
+        return payload
+
+    def commission_rate(self, symbol: str | None = None) -> dict[str, Any]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        payload = self._request_json("GET", "/fapi/v1/commissionRate", signed=True, params={"symbol": symbol})
+        if not isinstance(payload, dict):
+            raise BinancePrivateError(f"Unexpected Binance commissionRate payload: {payload}")
+        return payload
+
+    def position_risk(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        payload = self._request_json("GET", "/fapi/v2/positionRisk", signed=True, params={"symbol": symbol})
+        if not isinstance(payload, list):
+            raise BinancePrivateError(f"Unexpected Binance positionRisk payload: {payload}")
+        return payload
+
     def exchange_info(self) -> dict[str, Any]:
         payload = self._request_json("GET", "/fapi/v1/exchangeInfo", signed=False)
         if not isinstance(payload, dict):
@@ -158,6 +179,100 @@ class BinancePrivateClient:
             "endpoint": "/fapi/v1/order/test",
             "order": order,
             "response": response,
+        }
+
+    def live_preflight(self, *, symbol: str | None = None) -> dict[str, Any]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        account_probe = self.account_probe()
+        symbol_info = self.symbol_info(symbol)
+        filters = {item.get("filterType"): item for item in symbol_info.get("filters", [])}
+        commission = self.commission_rate(symbol)
+        open_orders = self.open_orders(symbol)
+        position_risk = self.position_risk(symbol)
+        target_positions = [
+            {
+                "symbol": item.get("symbol"),
+                "positionAmt": item.get("positionAmt"),
+                "entryPrice": item.get("entryPrice"),
+                "markPrice": item.get("markPrice"),
+                "unRealizedProfit": item.get("unRealizedProfit"),
+                "liquidationPrice": item.get("liquidationPrice"),
+                "leverage": item.get("leverage"),
+                "marginType": item.get("marginType"),
+                "isolatedMargin": item.get("isolatedMargin"),
+                "positionSide": item.get("positionSide"),
+            }
+            for item in position_risk
+            if item.get("symbol") == symbol
+        ]
+        hard_failures: list[str] = []
+        warnings: list[str] = []
+        if not account_probe.get("can_trade"):
+            hard_failures.append("account_cannot_trade")
+        if abs(int(account_probe.get("clock_skew_ms") or 0)) > 2000:
+            hard_failures.append("clock_skew_exceeds_2s")
+        if open_orders:
+            hard_failures.append("symbol_has_open_orders")
+        if any(_nonzero_number(item.get("positionAmt")) for item in target_positions):
+            hard_failures.append("symbol_has_open_position")
+        if float(account_probe.get("total_available_balance") or 0.0) <= 0:
+            hard_failures.append("no_available_balance")
+        if len(target_positions) != 1:
+            warnings.append("unexpected_position_risk_row_count")
+        try:
+            buy_template = self.build_market_order_test("BUY", symbol=symbol)
+            sell_template = self.build_market_order_test("SELL", symbol=symbol)
+        except BinancePrivateError as exc:
+            hard_failures.append("dust_order_template_invalid")
+            buy_template = None
+            sell_template = None
+            warnings.append(str(exc))
+        maker_bps = _rate_to_bps(commission.get("makerCommissionRate"))
+        taker_bps = _rate_to_bps(commission.get("takerCommissionRate"))
+        return {
+            "ok": not hard_failures,
+            "dry_run": True,
+            "read_only": True,
+            "submitted_to_matching_engine": False,
+            "symbol": symbol,
+            "env": self.settings.binance_env,
+            "account": account_probe,
+            "commission": {
+                "symbol": commission.get("symbol", symbol),
+                "makerCommissionRate": commission.get("makerCommissionRate"),
+                "takerCommissionRate": commission.get("takerCommissionRate"),
+                "maker_bps": _format_decimal(maker_bps) if maker_bps is not None else None,
+                "taker_bps": _format_decimal(taker_bps) if taker_bps is not None else None,
+                "round_trip_taker_bps": _format_decimal(taker_bps * Decimal("2")) if taker_bps is not None else None,
+            },
+            "symbol_rules": {
+                "status": symbol_info.get("status"),
+                "contractType": symbol_info.get("contractType"),
+                "pricePrecision": symbol_info.get("pricePrecision"),
+                "quantityPrecision": symbol_info.get("quantityPrecision"),
+                "marketLotSize": filters.get("MARKET_LOT_SIZE"),
+                "lotSize": filters.get("LOT_SIZE"),
+                "minNotional": filters.get("MIN_NOTIONAL"),
+            },
+            "position_risk": target_positions,
+            "open_orders_count": len(open_orders),
+            "open_orders": [_summarize_open_order(item) for item in open_orders],
+            "order_templates": {
+                "buy_market_test": buy_template,
+                "sell_market_test": sell_template,
+            },
+            "limits": {
+                "live_trading_enabled": self.settings.live_trading_enabled,
+                "live_dry_run": self.settings.live_dry_run,
+                "live_min_notional_usd": self.settings.live_min_notional_usd,
+                "live_max_notional_usd": self.settings.live_max_notional_usd,
+                "live_dust_test_notional_usd": self.settings.live_dust_test_notional_usd,
+                "live_max_open_positions": self.settings.live_max_open_positions,
+                "live_max_trades_per_day": self.settings.live_max_trades_per_day,
+                "live_daily_max_loss_usd": self.settings.live_daily_max_loss_usd,
+            },
+            "hard_failures": hard_failures,
+            "warnings": warnings,
         }
 
     def account_probe(self) -> dict[str, Any]:
@@ -259,6 +374,27 @@ def _format_decimal(value: Decimal) -> str:
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text
+
+
+def _rate_to_bps(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(value)) * Decimal("10000")
+
+
+def _summarize_open_order(order: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "orderId": order.get("orderId"),
+        "symbol": order.get("symbol"),
+        "status": order.get("status"),
+        "side": order.get("side"),
+        "type": order.get("type"),
+        "origQty": order.get("origQty"),
+        "executedQty": order.get("executedQty"),
+        "reduceOnly": order.get("reduceOnly"),
+        "positionSide": order.get("positionSide"),
+        "time": order.get("time"),
+    }
 
 
 def _nonzero_number(value: object) -> bool:

@@ -177,6 +177,14 @@ def binance_account_probe() -> None:
         raise SystemExit(str(exc)) from exc
 
 
+def binance_live_preflight(symbol: str | None) -> None:
+    settings = Settings()
+    try:
+        print(json.dumps(BinancePrivateClient(settings).live_preflight(symbol=symbol), indent=2, default=str))
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
 def binance_order_test(side: str, symbol: str | None, notional_usd: float | None) -> None:
     settings = Settings()
     try:
@@ -254,6 +262,12 @@ def main() -> None:
         "binance-account-probe",
         help="Read-only signed Binance USD-M Futures account/auth probe. Does not place or modify orders.",
     )
+    preflight_parser = sub.add_parser(
+        "binance-live-preflight",
+        help="Read-only Binance USD-M Futures preflight for live dust testing. Does not place or modify orders.",
+    )
+    preflight_parser.add_argument("--symbol", default=None)
+
     order_test_parser = sub.add_parser(
         "binance-order-test",
         help="Validate a Binance USD-M Futures MARKET order using /fapi/v1/order/test. Places nothing.",
@@ -334,6 +348,8 @@ def main() -> None:
         )
     elif args.command == "binance-account-probe":
         binance_account_probe()
+    elif args.command == "binance-live-preflight":
+        binance_live_preflight(args.symbol)
     elif args.command == "binance-order-test":
         binance_order_test(args.side, args.symbol, args.notional_usd)
     elif args.command == "latency-probe":
