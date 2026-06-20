@@ -17,6 +17,7 @@ from futures_lab.data_ops import (
     summarize_regime_outcomes,
 )
 from futures_lab.latency_probe import build_probe_streams, run_latency_probe
+from futures_lab.live_canary import run_live_canary
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.readiness import evaluate_readiness
 from futures_lab.runtime import TradingRuntime
@@ -231,6 +232,29 @@ def binance_flatten_position(symbol: str | None, confirm_live_order: bool) -> No
     print(json.dumps(result, indent=2, default=str))
 
 
+async def binance_live_canary(seconds: int, max_trades: int, symbol: str | None, confirm_live_order: bool) -> None:
+    if not confirm_live_order:
+        raise SystemExit("Refusing to run live canary without --confirm-live-order.")
+    settings = Settings(SYMBOL=symbol) if symbol else Settings()
+    stop_requested = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_requested.set)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop_requested.set))
+    try:
+        result = await run_live_canary(
+            settings,
+            seconds=seconds,
+            max_trades=max_trades,
+            stop_requested=stop_requested,
+        )
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, indent=2, default=str))
+
+
 async def latency_probe(
     seconds: int,
     profile: str,
@@ -337,6 +361,15 @@ def main() -> None:
     flatten_parser.add_argument("--symbol", default=None)
     flatten_parser.add_argument("--confirm-live-order", action="store_true", help="Required. This command can place a real reduce-only order.")
 
+    live_canary_parser = sub.add_parser(
+        "binance-live-canary",
+        help="Run a tightly capped live canary that mirrors paper opens/closes with tiny Binance orders.",
+    )
+    live_canary_parser.add_argument("--seconds", type=int, default=3600)
+    live_canary_parser.add_argument("--max-trades", type=int, default=1)
+    live_canary_parser.add_argument("--symbol", default=None)
+    live_canary_parser.add_argument("--confirm-live-order", action="store_true", help="Required. This command can place real orders.")
+
     latency_parser = sub.add_parser("latency-probe", help="Measure Binance WebSocket event lag without running strategy logic.")
     latency_parser.add_argument("--seconds", type=int, default=300)
     latency_parser.add_argument(
@@ -414,6 +447,8 @@ def main() -> None:
         binance_dust_open(args.side, args.symbol, args.confirm_live_order)
     elif args.command == "binance-flatten-position":
         binance_flatten_position(args.symbol, args.confirm_live_order)
+    elif args.command == "binance-live-canary":
+        asyncio.run(binance_live_canary(args.seconds, args.max_trades, args.symbol, args.confirm_live_order))
     elif args.command == "latency-probe":
         if args.list_profiles:
             settings = Settings()
