@@ -181,6 +181,117 @@ class BinancePrivateClient:
             "response": response,
         }
 
+    def place_market_order(
+        self,
+        side: str,
+        *,
+        symbol: str | None = None,
+        quantity: str,
+        reduce_only: bool = False,
+        client_order_prefix: str = "FL_LIVE",
+    ) -> dict[str, Any]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        side = side.strip().upper()
+        if side not in {"BUY", "SELL"}:
+            raise BinancePrivateError("side must be BUY or SELL.")
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": quantity,
+            "newOrderRespType": "RESULT",
+            "newClientOrderId": f"{client_order_prefix}_{int(time.time() * 1000)}",
+        }
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        payload = self._request_json("POST", "/fapi/v1/order", signed=True, params=params)
+        if not isinstance(payload, dict):
+            raise BinancePrivateError(f"Unexpected Binance order payload: {payload}")
+        return payload
+
+    def live_dust_round_trip(self, side: str, *, symbol: str | None = None) -> dict[str, Any]:
+        if not self.settings.live_trading_enabled:
+            raise BinancePrivateError("LIVE_TRADING_ENABLED must be true before placing live orders.")
+        if self.settings.live_dry_run:
+            raise BinancePrivateError("LIVE_DRY_RUN must be false before placing live orders.")
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        side = side.strip().upper()
+        if side not in {"BUY", "SELL"}:
+            raise BinancePrivateError("side must be BUY or SELL.")
+        preflight = self.live_preflight(symbol=symbol)
+        if not preflight.get("ok"):
+            raise BinancePrivateError(f"Live preflight failed: {preflight.get('hard_failures')}")
+        template_key = "buy_market_test" if side == "BUY" else "sell_market_test"
+        order_template = preflight["order_templates"][template_key]
+        quantity = order_template["quantity"]
+        before_account = self.account_probe()
+        opened_order: dict[str, Any] | None = None
+        close_order: dict[str, Any] | None = None
+        position_after_open: dict[str, Any] | None = None
+        final_position: dict[str, Any] | None = None
+        close_attempt_errors: list[str] = []
+        try:
+            opened_order = self.place_market_order(
+                side,
+                symbol=symbol,
+                quantity=quantity,
+                reduce_only=False,
+                client_order_prefix="FL_DUST_OPEN",
+            )
+            position_after_open = self._wait_for_position(symbol, expected_nonzero=True, timeout_seconds=10.0)
+            close_side, close_quantity = _close_order_from_position(position_after_open)
+            close_order = self.place_market_order(
+                close_side,
+                symbol=symbol,
+                quantity=close_quantity,
+                reduce_only=True,
+                client_order_prefix="FL_DUST_CLOSE",
+            )
+        except Exception as exc:
+            close_attempt_errors.append(str(exc))
+            emergency_position = self._first_position_risk(symbol)
+            if _nonzero_number(emergency_position.get("positionAmt")):
+                try:
+                    close_side, close_quantity = _close_order_from_position(emergency_position)
+                    close_order = self.place_market_order(
+                        close_side,
+                        symbol=symbol,
+                        quantity=close_quantity,
+                        reduce_only=True,
+                        client_order_prefix="FL_DUST_EMERGENCY_CLOSE",
+                    )
+                except Exception as close_exc:
+                    close_attempt_errors.append(f"emergency_close_failed: {close_exc}")
+            if close_attempt_errors and close_order is None:
+                raise BinancePrivateError("; ".join(close_attempt_errors)) from exc
+        final_position = self._wait_for_position(symbol, expected_nonzero=False, timeout_seconds=10.0)
+        after_account = self.account_probe()
+        open_orders = self.open_orders(symbol)
+        final_position_amt = Decimal(str(final_position.get("positionAmt") or "0"))
+        flat = final_position_amt == Decimal("0") and not open_orders
+        if not flat:
+            raise BinancePrivateError(f"Dust round trip did not end flat: position={final_position}, open_orders={open_orders}")
+        before_wallet = Decimal(str(before_account.get("total_wallet_balance") or "0"))
+        after_wallet = Decimal(str(after_account.get("total_wallet_balance") or "0"))
+        return {
+            "ok": True,
+            "live_order_placed": True,
+            "submitted_to_matching_engine": True,
+            "symbol": symbol,
+            "side": side,
+            "order_template": order_template,
+            "opened_order": _summarize_order_response(opened_order),
+            "position_after_open": position_after_open,
+            "close_order": _summarize_order_response(close_order),
+            "final_position": final_position,
+            "open_orders_count": len(open_orders),
+            "wallet_balance_before": before_account.get("total_wallet_balance"),
+            "wallet_balance_after": after_account.get("total_wallet_balance"),
+            "wallet_balance_delta_usd": _format_decimal(after_wallet - before_wallet),
+            "available_balance_after": after_account.get("total_available_balance"),
+            "close_attempt_errors": close_attempt_errors,
+        }
+
     def live_preflight(self, *, symbol: str | None = None) -> dict[str, Any]:
         symbol = (symbol or self.settings.symbol).strip().upper()
         account_probe = self.account_probe()
@@ -274,6 +385,25 @@ class BinancePrivateClient:
             "hard_failures": hard_failures,
             "warnings": warnings,
         }
+
+    def _first_position_risk(self, symbol: str) -> dict[str, Any]:
+        rows = self.position_risk(symbol)
+        for row in rows:
+            if row.get("symbol") == symbol:
+                return row
+        raise BinancePrivateError(f"No position risk row found for {symbol}.")
+
+    def _wait_for_position(self, symbol: str, *, expected_nonzero: bool, timeout_seconds: float) -> dict[str, Any]:
+        deadline = time.time() + timeout_seconds
+        last: dict[str, Any] | None = None
+        while time.time() <= deadline:
+            last = self._first_position_risk(symbol)
+            is_nonzero = _nonzero_number(last.get("positionAmt"))
+            if is_nonzero == expected_nonzero:
+                return _summarize_position_risk(last)
+            time.sleep(0.5)
+        expected = "non-zero" if expected_nonzero else "flat"
+        raise BinancePrivateError(f"Timed out waiting for {symbol} position to become {expected}. Last={last}")
 
     def account_probe(self) -> dict[str, Any]:
         server_time = self.server_time_ms()
@@ -394,6 +524,50 @@ def _summarize_open_order(order: dict[str, Any]) -> dict[str, Any]:
         "reduceOnly": order.get("reduceOnly"),
         "positionSide": order.get("positionSide"),
         "time": order.get("time"),
+    }
+
+
+def _close_order_from_position(position: dict[str, Any]) -> tuple[str, str]:
+    quantity = Decimal(str(position.get("positionAmt") or "0"))
+    if quantity == 0:
+        raise BinancePrivateError("Cannot close a flat position.")
+    side = "SELL" if quantity > 0 else "BUY"
+    return side, _format_decimal(abs(quantity))
+
+
+def _summarize_position_risk(position: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": position.get("symbol"),
+        "positionAmt": position.get("positionAmt"),
+        "entryPrice": position.get("entryPrice"),
+        "markPrice": position.get("markPrice"),
+        "unRealizedProfit": position.get("unRealizedProfit"),
+        "liquidationPrice": position.get("liquidationPrice"),
+        "leverage": position.get("leverage"),
+        "marginType": position.get("marginType"),
+        "isolatedMargin": position.get("isolatedMargin"),
+        "positionSide": position.get("positionSide"),
+    }
+
+
+def _summarize_order_response(order: dict[str, Any] | None) -> dict[str, Any] | None:
+    if order is None:
+        return None
+    return {
+        "orderId": order.get("orderId"),
+        "symbol": order.get("symbol"),
+        "status": order.get("status"),
+        "clientOrderId": order.get("clientOrderId"),
+        "side": order.get("side"),
+        "type": order.get("type"),
+        "origQty": order.get("origQty"),
+        "executedQty": order.get("executedQty"),
+        "avgPrice": order.get("avgPrice"),
+        "cumQuote": order.get("cumQuote"),
+        "reduceOnly": order.get("reduceOnly"),
+        "closePosition": order.get("closePosition"),
+        "positionSide": order.get("positionSide"),
+        "updateTime": order.get("updateTime"),
     }
 
 

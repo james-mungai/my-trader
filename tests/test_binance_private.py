@@ -342,3 +342,153 @@ def test_live_preflight_blocks_dirty_account_state() -> None:
     assert "symbol_has_open_orders" in result["hard_failures"]
     assert "symbol_has_open_position" in result["hard_failures"]
     assert result["open_orders"][0]["orderId"] == 123
+
+
+def test_live_dust_round_trip_requires_explicit_live_settings() -> None:
+    client = BinancePrivateClient(Settings(SYMBOL="ETHUSDT", BINANCE_API_KEY="live-key", BINANCE_API_SECRET="live-secret"))
+
+    with pytest.raises(BinancePrivateError, match="LIVE_TRADING_ENABLED"):
+        client.live_dust_round_trip("BUY")
+
+    dry_run_client = BinancePrivateClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=True,
+        )
+    )
+
+    with pytest.raises(BinancePrivateError, match="LIVE_DRY_RUN"):
+        dry_run_client.live_dust_round_trip("BUY")
+
+
+def test_live_dust_round_trip_opens_reduce_only_closes_and_verifies_flat() -> None:
+    calls = []
+
+    class FakeClient(BinancePrivateClient):
+        account_probe_calls = 0
+
+        def live_preflight(self, *, symbol: str | None = None) -> dict:
+            return {
+                "ok": True,
+                "order_templates": {
+                    "buy_market_test": {
+                        "symbol": "ETHUSDT",
+                        "side": "BUY",
+                        "type": "MARKET",
+                        "quantity": "0.012",
+                        "estimated_notional_usd": "20.72",
+                    },
+                    "sell_market_test": {
+                        "symbol": "ETHUSDT",
+                        "side": "SELL",
+                        "type": "MARKET",
+                        "quantity": "0.012",
+                        "estimated_notional_usd": "20.72",
+                    },
+                },
+            }
+
+        def account_probe(self) -> dict:
+            self.account_probe_calls += 1
+            balance = "100.00000000" if self.account_probe_calls == 1 else "99.98000000"
+            return {"total_wallet_balance": balance, "total_available_balance": balance}
+
+        def place_market_order(
+            self,
+            side: str,
+            *,
+            symbol: str | None = None,
+            quantity: str,
+            reduce_only: bool = False,
+            client_order_prefix: str = "FL_LIVE",
+        ) -> dict:
+            calls.append(
+                {
+                    "side": side,
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "reduce_only": reduce_only,
+                    "client_order_prefix": client_order_prefix,
+                }
+            )
+            return {
+                "orderId": len(calls),
+                "symbol": symbol,
+                "status": "FILLED",
+                "side": side,
+                "type": "MARKET",
+                "origQty": quantity,
+                "executedQty": quantity,
+                "avgPrice": "1726.50",
+                "cumQuote": "20.718",
+                "reduceOnly": reduce_only,
+                "positionSide": "BOTH",
+            }
+
+        def _wait_for_position(self, symbol: str, *, expected_nonzero: bool, timeout_seconds: float) -> dict:
+            if expected_nonzero:
+                return {
+                    "symbol": symbol,
+                    "positionAmt": "0.012",
+                    "entryPrice": "1726.50",
+                    "markPrice": "1726.60",
+                    "unRealizedProfit": "0.00100000",
+                    "liquidationPrice": "1000",
+                    "leverage": "150",
+                    "marginType": "cross",
+                    "isolatedMargin": "0.00000000",
+                    "positionSide": "BOTH",
+                }
+            return {
+                "symbol": symbol,
+                "positionAmt": "0.000",
+                "entryPrice": "0.0",
+                "markPrice": "1726.60",
+                "unRealizedProfit": "0.00000000",
+                "liquidationPrice": "0",
+                "leverage": "150",
+                "marginType": "cross",
+                "isolatedMargin": "0.00000000",
+                "positionSide": "BOTH",
+            }
+
+        def open_orders(self, symbol: str | None = None) -> list[dict]:
+            return []
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=False,
+            LIVE_MAX_NOTIONAL_USD=25,
+        )
+    )
+
+    result = client.live_dust_round_trip("BUY")
+
+    assert result["ok"] is True
+    assert result["submitted_to_matching_engine"] is True
+    assert calls == [
+        {
+            "side": "BUY",
+            "symbol": "ETHUSDT",
+            "quantity": "0.012",
+            "reduce_only": False,
+            "client_order_prefix": "FL_DUST_OPEN",
+        },
+        {
+            "side": "SELL",
+            "symbol": "ETHUSDT",
+            "quantity": "0.012",
+            "reduce_only": True,
+            "client_order_prefix": "FL_DUST_CLOSE",
+        },
+    ]
+    assert result["final_position"]["positionAmt"] == "0.000"
+    assert result["open_orders_count"] == 0
+    assert result["wallet_balance_delta_usd"] == "-0.02"

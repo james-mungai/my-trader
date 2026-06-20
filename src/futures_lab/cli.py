@@ -198,6 +198,17 @@ def binance_order_test(side: str, symbol: str | None, notional_usd: float | None
     print(json.dumps(result, indent=2, default=str))
 
 
+def binance_dust_round_trip(side: str, symbol: str | None, confirm_live_order: bool) -> None:
+    if not confirm_live_order:
+        raise SystemExit("Refusing to place a live order without --confirm-live-order.")
+    settings = Settings()
+    try:
+        result = BinancePrivateClient(settings).live_dust_round_trip(side, symbol=symbol)
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, indent=2, default=str))
+
+
 async def latency_probe(
     seconds: int,
     profile: str,
@@ -281,6 +292,14 @@ def main() -> None:
         help="Target notional before filter rounding. Must not exceed LIVE_MAX_NOTIONAL_USD.",
     )
 
+    dust_parser = sub.add_parser(
+        "binance-dust-round-trip",
+        help="Place one tiny live Binance USD-M MARKET order, immediately close reduce-only, then verify flat.",
+    )
+    dust_parser.add_argument("--side", choices=["BUY", "SELL"], required=True)
+    dust_parser.add_argument("--symbol", default=None)
+    dust_parser.add_argument("--confirm-live-order", action="store_true", help="Required. This command places real orders.")
+
     latency_parser = sub.add_parser("latency-probe", help="Measure Binance WebSocket event lag without running strategy logic.")
     latency_parser.add_argument("--seconds", type=int, default=300)
     latency_parser.add_argument(
@@ -352,6 +371,8 @@ def main() -> None:
         binance_live_preflight(args.symbol)
     elif args.command == "binance-order-test":
         binance_order_test(args.side, args.symbol, args.notional_usd)
+    elif args.command == "binance-dust-round-trip":
+        binance_dust_round_trip(args.side, args.symbol, args.confirm_live_order)
     elif args.command == "latency-probe":
         if args.list_profiles:
             settings = Settings()
