@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     write_shadow_trade_log: bool = Field(default=True, alias="WRITE_SHADOW_TRADE_LOG")
     write_regime_outcome_log: bool = Field(default=True, alias="WRITE_REGIME_OUTCOME_LOG")
     write_candidate_outcome_log: bool = Field(default=True, alias="WRITE_CANDIDATE_OUTCOME_LOG")
+    feature_log_sample_interval: int = Field(default=1, alias="FEATURE_LOG_SAMPLE_INTERVAL")
+    decision_log_wait_sample_interval: int = Field(default=1, alias="DECISION_LOG_WAIT_SAMPLE_INTERVAL")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
     state_window_seconds: int = Field(default=900, alias="STATE_WINDOW_SECONDS")
     stale_after_seconds: float = Field(default=2.0, alias="STALE_AFTER_SECONDS")
@@ -154,6 +156,10 @@ class Settings(BaseSettings):
     range_bound_time_decay_flow_adverse_move_pct: float = Field(
         default=0.0005,
         alias="RANGE_BOUND_TIME_DECAY_FLOW_ADVERSE_MOVE_PCT",
+    )
+    range_bound_time_decay_structural_fraction: float = Field(
+        default=0.20,
+        alias="RANGE_BOUND_TIME_DECAY_STRUCTURAL_FRACTION",
     )
     range_bound_exit_counterfactual_enabled: bool = Field(
         default=True,

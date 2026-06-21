@@ -206,7 +206,11 @@ async def run_live_canary(
                 summary.live_opens += 1
                 summary.events.append({"event": "live_open", "payload": live_open})
                 runtime.audit.write("live_canary_open", live_open)
-                opened = runtime.paper.open_from_decision(decision, opened_at=market.last_received_at)
+                opened = runtime.paper.open_from_decision(
+                    decision,
+                    opened_at=market.last_received_at,
+                    notional_usd=_filled_notional_usd(live_open),
+                )
                 if opened is None:
                     flatten = client.flatten_position(symbol=symbol)
                     live_position_open = False
@@ -321,3 +325,20 @@ def _live_position_loss_check(
         "max_intratrade_loss_usd": str(max_intratrade_loss_usd),
         "loss_limit_hit": unrealized <= -abs(Decimal(str(max_intratrade_loss_usd))),
     }
+
+
+def _filled_notional_usd(live_open: dict[str, Any]) -> float | None:
+    order = live_open.get("opened_order") or {}
+    for key in ("cumQuote", "cummulativeQuoteQty", "quoteQty"):
+        value = order.get(key)
+        if value is not None:
+            parsed = float(value)
+            if parsed > 0:
+                return parsed
+    template = live_open.get("order_template") or {}
+    value = template.get("estimated_notional_usd")
+    if value is not None:
+        parsed = float(value)
+        if parsed > 0:
+            return parsed
+    return None

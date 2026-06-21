@@ -261,7 +261,12 @@ class PaperBroker:
         self.day = date.today().isoformat()
         return self.state()
 
-    def open_from_decision(self, decision: Decision, opened_at: datetime | None = None) -> PaperPosition | None:
+    def open_from_decision(
+        self,
+        decision: Decision,
+        opened_at: datetime | None = None,
+        notional_usd: float | None = None,
+    ) -> PaperPosition | None:
         self._reset_day_if_needed()
         if self.open_position is not None:
             return None
@@ -276,8 +281,12 @@ class PaperBroker:
         ):
             return None
         side = Side.long if decision.action == DecisionAction.propose_long else Side.short
-        stake = self.settings.stake_usd
-        notional = stake * decision.leverage
+        if notional_usd is not None and notional_usd > 0:
+            notional = float(notional_usd)
+            stake = notional / decision.leverage
+        else:
+            stake = self.settings.stake_usd
+            notional = stake * decision.leverage
         quantity = notional / decision.entry_price
         actual_opened_at = opened_at or utc_now()
         trade_profile = str(decision.evidence.get("trade_profile") or decision.mode.value)
@@ -445,9 +454,18 @@ class PaperBroker:
         move = self._move_pct(pos, market.mid_price)
         if move <= -abs(self.settings.range_bound_time_decay_adverse_move_pct):
             return True
-        return self._range_flow_faded(pos, market) and move <= -abs(
-            self.settings.range_bound_time_decay_flow_adverse_move_pct
-        )
+        if not self._range_flow_faded(pos, market):
+            return False
+        required_flow_adverse = abs(self.settings.range_bound_time_decay_flow_adverse_move_pct)
+        if pos.structural_adverse_move_pct is not None:
+            structural_threshold = abs(pos.structural_adverse_move_pct) * abs(
+                self.settings.range_bound_time_decay_structural_fraction
+            )
+            required_flow_adverse = max(
+                required_flow_adverse,
+                min(abs(self.settings.range_bound_time_decay_adverse_move_pct), structural_threshold),
+            )
+        return move <= -required_flow_adverse
 
     def _range_flow_faded(self, pos: PaperPosition, market: MarketState) -> bool:
         r60 = market.return_60s_pct or 0.0

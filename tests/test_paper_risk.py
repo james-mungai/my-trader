@@ -183,7 +183,7 @@ def test_range_bound_uses_structural_invalidation_instead_of_micro_stop():
     assert trade.exit_reason == "structural_invalidation"
 
 
-def test_range_bound_time_decay_cuts_stale_entry_before_structural_break():
+def test_range_bound_time_decay_keeps_mildly_adverse_trade_inside_structural_box():
     settings = Settings(
         MIN_CONFIDENCE=0.70,
         STRATEGY_VARIANT="range_bound_support_resistance",
@@ -216,9 +216,22 @@ def test_range_bound_time_decay_cuts_stale_entry_before_structural_break():
     assert position is not None
     assert broker.mark(_market(100.02), timestamp=opened_at + timedelta(seconds=120)) is None
 
+    assert (
+        broker.mark(
+            _market(
+                99.95,
+                return_60s_pct=-0.0002,
+                taker_buy_ratio_10s=0.44,
+                higher_timeframe_context=market.higher_timeframe_context,
+            ),
+            timestamp=opened_at + timedelta(seconds=181),
+        )
+        is None
+    )
+
     trade = broker.mark(
         _market(
-            99.95,
+            99.80,
             return_60s_pct=-0.0002,
             taker_buy_ratio_10s=0.44,
             higher_timeframe_context=market.higher_timeframe_context,
@@ -228,6 +241,20 @@ def test_range_bound_time_decay_cuts_stale_entry_before_structural_break():
 
     assert trade is not None
     assert trade.exit_reason == "range_time_decay"
+
+
+def test_paper_can_match_live_canary_notional() -> None:
+    settings = Settings(MIN_CONFIDENCE=0.70, PAPER_LIVE_EDGE_GATE_ENABLED=False)
+    market = _market(100.0)
+    decision = HitAndRunStrategy(settings).decide(market)
+    broker = PaperBroker(settings)
+
+    position = broker.open_from_decision(decision, notional_usd=95.0)
+
+    assert position is not None
+    assert position.notional_usd == pytest.approx(95.0)
+    assert position.stake_usd == pytest.approx(95.0 / position.leverage)
+    assert position.quantity == pytest.approx(95.0 / position.entry_price)
 
 
 def test_range_bound_time_decay_keeps_flat_trade_inside_structural_box():

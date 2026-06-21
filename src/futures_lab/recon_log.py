@@ -13,6 +13,8 @@ class ReconLogger:
     settings: Settings
 
     def __post_init__(self) -> None:
+        self._feature_rows = 0
+        self._decision_rows = 0
         self.features_dir = Path(self.settings.data_dir) / "features"
         self.decisions_dir = Path(self.settings.data_dir) / "decisions"
         self.paper_dir = Path(self.settings.data_dir) / "paper_trades"
@@ -32,6 +34,10 @@ class ReconLogger:
     def write_feature(self, market: MarketState) -> None:
         if not self.settings.write_feature_log:
             return
+        self._feature_rows += 1
+        sample_interval = max(1, self.settings.feature_log_sample_interval)
+        if sample_interval > 1 and self._feature_rows % sample_interval != 0:
+            return
         self._write(self.features_dir, "features", self._market_row(market))
 
     def write_decision(
@@ -42,6 +48,15 @@ class ReconLogger:
         decision_latency_ms: float | None = None,
     ) -> None:
         if not self.settings.write_decision_log:
+            return
+        self._decision_rows += 1
+        sample_interval = max(1, self.settings.decision_log_wait_sample_interval)
+        if (
+            sample_interval > 1
+            and self._decision_rows % sample_interval != 0
+            and not risk.allowed
+            and decision.action.value == "wait"
+        ):
             return
         self._write(
             self.decisions_dir,

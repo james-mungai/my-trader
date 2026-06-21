@@ -2,7 +2,7 @@ import pytest
 
 from futures_lab.binance_private import BinancePrivateError
 from futures_lab.config import Settings
-from futures_lab.live_canary import live_order_side_from_decision, validate_live_canary_settings
+from futures_lab.live_canary import _filled_notional_usd, live_order_side_from_decision, validate_live_canary_settings
 from futures_lab.models import Decision, DecisionAction
 
 
@@ -65,3 +65,21 @@ def test_validate_live_canary_settings_rejects_unsafe_live_config() -> None:
         validate_live_canary_settings(_settings(LIVE_CANARY_POSITION_CHECK_SECONDS=0), max_trades=1)
     with pytest.raises(BinancePrivateError, match="LIVE_MAX_TRADES_PER_DAY"):
         validate_live_canary_settings(_settings(LIVE_MAX_TRADES_PER_DAY=1), max_trades=2)
+
+
+def test_filled_notional_prefers_actual_cum_quote() -> None:
+    assert _filled_notional_usd(
+        {
+            "opened_order": {"cumQuote": "93.51"},
+            "order_template": {"estimated_notional_usd": "95.00"},
+        }
+    ) == pytest.approx(93.51)
+
+
+def test_filled_notional_falls_back_to_template() -> None:
+    assert _filled_notional_usd(
+        {
+            "opened_order": {},
+            "order_template": {"estimated_notional_usd": "95.00"},
+        }
+    ) == pytest.approx(95.0)
