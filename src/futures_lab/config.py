@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     fast_stop_move_pct: float = Field(default=0.0015, alias="FAST_STOP_MOVE_PCT")
     slow_target_move_pct: float = Field(default=0.0035, alias="SLOW_TARGET_MOVE_PCT")
     slow_stop_move_pct: float = Field(default=0.0035, alias="SLOW_STOP_MOVE_PCT")
-    range_bound_target_move_pct: float = Field(default=0.0050, alias="RANGE_BOUND_TARGET_MOVE_PCT")
+    range_bound_target_move_pct: float = Field(default=0.0060, alias="RANGE_BOUND_TARGET_MOVE_PCT")
     range_bound_stop_move_pct: float = Field(default=0.0025, alias="RANGE_BOUND_STOP_MOVE_PCT")
     range_bound_leverage: int = Field(default=200, alias="RANGE_BOUND_LEVERAGE")
     range_bound_timeframes: str = Field(default="15m,30m,1h", alias="RANGE_BOUND_TIMEFRAMES")
@@ -435,6 +435,19 @@ class Settings(BaseSettings):
     live_canary_max_loss_usd: float = Field(default=2.0, alias="LIVE_CANARY_MAX_LOSS_USD")
     live_canary_intratrade_max_loss_usd: float = Field(default=0.0, alias="LIVE_CANARY_INTRATRADE_MAX_LOSS_USD")
     live_canary_position_check_seconds: float = Field(default=15.0, alias="LIVE_CANARY_POSITION_CHECK_SECONDS")
+    live_canary_profit_protection_enabled: bool = Field(
+        default=True,
+        alias="LIVE_CANARY_PROFIT_PROTECTION_ENABLED",
+    )
+    live_canary_max_consecutive_losses: int = Field(default=2, alias="LIVE_CANARY_MAX_CONSECUTIVE_LOSSES")
+    live_canary_profit_lock_min_profit_usd: float = Field(
+        default=0.25,
+        alias="LIVE_CANARY_PROFIT_LOCK_MIN_PROFIT_USD",
+    )
+    live_canary_max_profit_giveback_fraction: float = Field(
+        default=0.50,
+        alias="LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION",
+    )
 
     binance_api_key: str | None = Field(default=None, alias="BINANCE_API_KEY")
     binance_api_secret: str | None = Field(default=None, alias="BINANCE_API_SECRET")

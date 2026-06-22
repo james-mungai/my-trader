@@ -2,7 +2,13 @@ import pytest
 
 from futures_lab.binance_private import BinancePrivateError
 from futures_lab.config import Settings
-from futures_lab.live_canary import _filled_notional_usd, live_order_side_from_decision, validate_live_canary_settings
+from futures_lab.live_canary import (
+    LiveProfitProtection,
+    _filled_notional_usd,
+    _live_profit_protection_check,
+    live_order_side_from_decision,
+    validate_live_canary_settings,
+)
 from futures_lab.models import Decision, DecisionAction
 
 
@@ -63,6 +69,10 @@ def test_validate_live_canary_settings_rejects_unsafe_live_config() -> None:
         validate_live_canary_settings(_settings(LIVE_DAILY_MAX_LOSS_USD=3), max_trades=1)
     with pytest.raises(BinancePrivateError, match="LIVE_CANARY_POSITION_CHECK_SECONDS"):
         validate_live_canary_settings(_settings(LIVE_CANARY_POSITION_CHECK_SECONDS=0), max_trades=1)
+    with pytest.raises(BinancePrivateError, match="LIVE_CANARY_MAX_CONSECUTIVE_LOSSES"):
+        validate_live_canary_settings(_settings(LIVE_CANARY_MAX_CONSECUTIVE_LOSSES=-1), max_trades=1)
+    with pytest.raises(BinancePrivateError, match="LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION"):
+        validate_live_canary_settings(_settings(LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION=1.1), max_trades=1)
     with pytest.raises(BinancePrivateError, match="LIVE_MAX_TRADES_PER_DAY"):
         validate_live_canary_settings(_settings(LIVE_MAX_TRADES_PER_DAY=1), max_trades=2)
 
@@ -83,3 +93,54 @@ def test_filled_notional_falls_back_to_template() -> None:
             "order_template": {"estimated_notional_usd": "95.00"},
         }
     ) == pytest.approx(95.0)
+
+
+def test_live_profit_protection_stops_after_consecutive_losses() -> None:
+    settings = _settings(
+        LIVE_CANARY_PROFIT_PROTECTION_ENABLED=True,
+        LIVE_CANARY_MAX_CONSECUTIVE_LOSSES=2,
+        LIVE_CANARY_PROFIT_LOCK_MIN_PROFIT_USD=0.25,
+        LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION=0.5,
+    )
+    state = LiveProfitProtection(previous_close_wallet=100)
+
+    first = _live_profit_protection_check(settings, start_wallet=100, current_wallet=99.8, state=state)
+    second = _live_profit_protection_check(settings, start_wallet=100, current_wallet=99.7, state=first.state)
+
+    assert first.stop is False
+    assert first.state.consecutive_losses == 1
+    assert second.stop is True
+    assert second.reason == "live_consecutive_losses_hit"
+
+
+def test_live_profit_protection_stops_after_peak_giveback() -> None:
+    settings = _settings(
+        LIVE_CANARY_PROFIT_PROTECTION_ENABLED=True,
+        LIVE_CANARY_MAX_CONSECUTIVE_LOSSES=0,
+        LIVE_CANARY_PROFIT_LOCK_MIN_PROFIT_USD=0.25,
+        LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION=0.5,
+    )
+    state = LiveProfitProtection(previous_close_wallet=100)
+
+    winner = _live_profit_protection_check(settings, start_wallet=100, current_wallet=101.0, state=state)
+    giveback = _live_profit_protection_check(settings, start_wallet=100, current_wallet=100.45, state=winner.state)
+
+    assert winner.stop is False
+    assert winner.state.peak_profit_usd == 1
+    assert giveback.stop is True
+    assert giveback.reason == "live_profit_giveback_hit"
+
+
+def test_live_profit_protection_disabled_tracks_without_stopping() -> None:
+    settings = _settings(
+        LIVE_CANARY_PROFIT_PROTECTION_ENABLED=False,
+        LIVE_CANARY_MAX_CONSECUTIVE_LOSSES=1,
+        LIVE_CANARY_PROFIT_LOCK_MIN_PROFIT_USD=0.25,
+        LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION=0.5,
+    )
+    state = LiveProfitProtection(previous_close_wallet=100)
+
+    verdict = _live_profit_protection_check(settings, start_wallet=100, current_wallet=99.0, state=state)
+
+    assert verdict.stop is False
+    assert verdict.state.consecutive_losses == 1

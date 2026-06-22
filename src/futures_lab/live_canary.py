@@ -54,6 +54,21 @@ class LiveCanarySummary:
         }
 
 
+@dataclass
+class LiveProfitProtection:
+    previous_close_wallet: Decimal
+    peak_profit_usd: Decimal = Decimal("0")
+    consecutive_losses: int = 0
+
+
+@dataclass
+class LiveProfitProtectionVerdict:
+    stop: bool
+    reason: str | None
+    state: LiveProfitProtection
+    payload: dict[str, Any]
+
+
 def validate_live_canary_settings(settings: Settings, max_trades: int) -> None:
     if not settings.live_trading_enabled:
         raise BinancePrivateError("LIVE_TRADING_ENABLED must be true before running live canary.")
@@ -84,6 +99,12 @@ def validate_live_canary_settings(settings: Settings, max_trades: int) -> None:
         )
     if settings.live_canary_position_check_seconds <= 0:
         raise BinancePrivateError("LIVE_CANARY_POSITION_CHECK_SECONDS must be positive.")
+    if settings.live_canary_max_consecutive_losses < 0:
+        raise BinancePrivateError("LIVE_CANARY_MAX_CONSECUTIVE_LOSSES must be non-negative.")
+    if settings.live_canary_profit_lock_min_profit_usd < 0:
+        raise BinancePrivateError("LIVE_CANARY_PROFIT_LOCK_MIN_PROFIT_USD must be non-negative.")
+    if not 0 <= settings.live_canary_max_profit_giveback_fraction <= 1:
+        raise BinancePrivateError("LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION must be between 0 and 1.")
 
 
 def live_order_side_from_decision(decision: Decision) -> str | None:
@@ -118,6 +139,7 @@ async def run_live_canary(
     )
     runtime = TradingRuntime.create(settings)
     live_position_open = False
+    profit_protection = LiveProfitProtection(previous_close_wallet=Decimal(start_wallet))
     deadline = monotonic() + max(0, seconds)
     interval = max(0.1, settings.decision_interval_ms / 1000)
     next_position_check = monotonic()
@@ -132,6 +154,10 @@ async def run_live_canary(
             "max_trades": max_trades,
             "live_max_notional_usd": settings.live_max_notional_usd,
             "live_daily_max_loss_usd": settings.live_daily_max_loss_usd,
+            "live_profit_protection_enabled": settings.live_canary_profit_protection_enabled,
+            "live_max_consecutive_losses": settings.live_canary_max_consecutive_losses,
+            "live_profit_lock_min_profit_usd": settings.live_canary_profit_lock_min_profit_usd,
+            "live_max_profit_giveback_fraction": settings.live_canary_max_profit_giveback_fraction,
         },
     )
     try:
@@ -177,6 +203,18 @@ async def run_live_canary(
                     runtime.audit.write("live_canary_flatten", flatten)
                     if _wallet_loss_exceeded(start_wallet, flatten.get("wallet_balance_after"), settings.live_daily_max_loss_usd):
                         summary.stop_reason = "live_daily_max_loss_hit"
+                        break
+                    protection_verdict = _live_profit_protection_check(
+                        settings,
+                        start_wallet=start_wallet,
+                        current_wallet=flatten.get("wallet_balance_after"),
+                        state=profit_protection,
+                    )
+                    profit_protection = protection_verdict.state
+                    runtime.audit.write("live_canary_profit_protection", protection_verdict.payload)
+                    summary.events.append({"event": "live_profit_protection", "payload": protection_verdict.payload})
+                    if protection_verdict.stop:
+                        summary.stop_reason = protection_verdict.reason or "live_profit_protection_hit"
                         break
                 if summary.live_closes >= max_trades:
                     summary.stop_reason = "max_live_trades_hit"
@@ -303,6 +341,84 @@ def _wallet_loss_exceeded(start: object, current: object, max_loss_usd: float) -
     if current is None:
         return False
     return Decimal(str(current)) - Decimal(str(start)) <= -abs(Decimal(str(max_loss_usd)))
+
+
+def _live_profit_protection_check(
+    settings: Settings,
+    *,
+    start_wallet: object,
+    current_wallet: object,
+    state: LiveProfitProtection,
+) -> LiveProfitProtectionVerdict:
+    current = _decimal_or_none(current_wallet)
+    if current is None:
+        return LiveProfitProtectionVerdict(
+            stop=False,
+            reason=None,
+            state=state,
+            payload={
+                "enabled": settings.live_canary_profit_protection_enabled,
+                "skipped": "missing_current_wallet",
+                "consecutive_losses": state.consecutive_losses,
+                "peak_profit_usd": str(state.peak_profit_usd),
+            },
+        )
+
+    start = Decimal(str(start_wallet))
+    trade_delta = current - state.previous_close_wallet
+    current_profit = current - start
+    peak_profit = max(state.peak_profit_usd, current_profit)
+    consecutive_losses = state.consecutive_losses + 1 if trade_delta < 0 else 0
+    new_state = LiveProfitProtection(
+        previous_close_wallet=current,
+        peak_profit_usd=peak_profit,
+        consecutive_losses=consecutive_losses,
+    )
+
+    max_losses = settings.live_canary_max_consecutive_losses
+    min_profit = Decimal(str(settings.live_canary_profit_lock_min_profit_usd))
+    max_giveback_fraction = Decimal(str(settings.live_canary_max_profit_giveback_fraction))
+    allowed_profit_after_giveback = peak_profit * (Decimal("1") - max_giveback_fraction)
+    giveback = peak_profit - current_profit
+    stop_reason: str | None = None
+    if settings.live_canary_profit_protection_enabled:
+        if max_losses > 0 and consecutive_losses >= max_losses:
+            stop_reason = "live_consecutive_losses_hit"
+        elif peak_profit >= min_profit and current_profit <= allowed_profit_after_giveback:
+            stop_reason = "live_profit_giveback_hit"
+
+    payload = {
+        "enabled": settings.live_canary_profit_protection_enabled,
+        "current_wallet": str(current),
+        "previous_close_wallet": str(state.previous_close_wallet),
+        "start_wallet": str(start),
+        "trade_delta_usd": str(trade_delta.normalize()),
+        "current_profit_usd": str(current_profit.normalize()),
+        "peak_profit_usd": str(peak_profit.normalize()),
+        "giveback_usd": str(giveback.normalize()),
+        "allowed_profit_after_giveback_usd": str(allowed_profit_after_giveback.normalize()),
+        "max_profit_giveback_fraction": str(max_giveback_fraction),
+        "profit_lock_min_profit_usd": str(min_profit),
+        "consecutive_losses": consecutive_losses,
+        "max_consecutive_losses": max_losses,
+        "stop": stop_reason is not None,
+        "stop_reason": stop_reason,
+    }
+    return LiveProfitProtectionVerdict(
+        stop=stop_reason is not None,
+        reason=stop_reason,
+        state=new_state,
+        payload=payload,
+    )
+
+
+def _decimal_or_none(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
 
 
 def _live_position_loss_check(
