@@ -119,8 +119,20 @@ class RiskEngine:
         if self._is_range_bound_candidate(selected) and not self.settings.range_bound_rolling_edge_monitor_enabled:
             return []
         if not candidate_quality or not candidate_quality.get("enabled"):
+            if self.settings.paper_live_rolling_block_until_ready:
+                return ["paper live rolling edge monitor warming up: missing candidate quality snapshot"]
             return []
         if not candidate_quality.get("ready"):
+            if self.settings.paper_live_rolling_block_until_ready:
+                accepted_count = int(candidate_quality.get("accepted_count") or 0)
+                rejected_count = int(candidate_quality.get("rejected_count") or 0)
+                min_accepted = int(candidate_quality.get("min_accepted") or self.settings.paper_live_rolling_min_accepted)
+                min_rejected = int(candidate_quality.get("min_rejected") or self.settings.paper_live_rolling_min_rejected)
+                return [
+                    "paper live rolling edge monitor warming up: "
+                    f"accepted_count={accepted_count}/{min_accepted}, "
+                    f"rejected_count={rejected_count}/{min_rejected}"
+                ]
             return []
         if not candidate_quality.get("block"):
             return []

@@ -655,6 +655,118 @@ def test_risk_blocks_live_paper_when_rolling_candidate_quality_is_weak():
     assert "paper live rolling edge monitor blocked opens" in " ".join(verdict.blockers)
 
 
+def test_risk_blocks_range_live_paper_until_rolling_candidate_quality_is_ready():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        PAPER_LIVE_MIN_TARGET_COST_MULTIPLE=2.5,
+        PAPER_LIVE_ROLLING_EDGE_MONITOR_ENABLED=True,
+        PAPER_LIVE_ROLLING_BLOCK_UNTIL_READY=True,
+        RANGE_BOUND_ROLLING_EDGE_MONITOR_ENABLED=True,
+        RANGE_BOUND_PAPER_LIVE_MIN_EXPECTED_EV_BPS=1.0,
+        RANGE_BOUND_PAPER_LIVE_MIN_SCORE=0.70,
+        RANGE_BOUND_PAPER_LIVE_MIN_TP_PROBABILITY=0.70,
+    )
+    selected = {
+        "strategy": "range_bound_support_resistance",
+        "family": "range_bound",
+        "side": "long",
+        "score": 0.74,
+        "p_hit_tp_before_sl": 0.72,
+        "expected_ev_bps": 4.0,
+        "blockers": [],
+    }
+    decision = _edge_decision(
+        0.006,
+        selected,
+        extra_evidence={
+            "range_bound_structural_risk": {
+                "long": {
+                    "blockers": [],
+                    "structural_adverse_move_pct": 0.03,
+                    "account_drawdown_fraction": 0.60,
+                }
+            }
+        },
+    )
+    candidate_quality = {
+        "enabled": True,
+        "ready": False,
+        "block": False,
+        "accepted_count": 7,
+        "rejected_count": 99,
+        "min_accepted": 20,
+        "min_rejected": 100,
+    }
+
+    verdict = RiskEngine(settings).evaluate(
+        decision,
+        _market(spread_bps=0.5),
+        PaperBroker(settings).state(),
+        candidate_quality=candidate_quality,
+    )
+
+    assert not verdict.allowed
+    joined = " ".join(verdict.blockers)
+    assert "paper live rolling edge monitor warming up" in joined
+    assert "accepted_count=7/20" in joined
+    assert "rejected_count=99/100" in joined
+
+
+def test_risk_allows_range_live_paper_after_rolling_candidate_quality_is_ready():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        PAPER_LIVE_MIN_TARGET_COST_MULTIPLE=2.5,
+        PAPER_LIVE_ROLLING_EDGE_MONITOR_ENABLED=True,
+        PAPER_LIVE_ROLLING_BLOCK_UNTIL_READY=True,
+        RANGE_BOUND_ROLLING_EDGE_MONITOR_ENABLED=True,
+        RANGE_BOUND_PAPER_LIVE_MIN_EXPECTED_EV_BPS=1.0,
+        RANGE_BOUND_PAPER_LIVE_MIN_SCORE=0.70,
+        RANGE_BOUND_PAPER_LIVE_MIN_TP_PROBABILITY=0.70,
+    )
+    selected = {
+        "strategy": "range_bound_support_resistance",
+        "family": "range_bound",
+        "side": "long",
+        "score": 0.74,
+        "p_hit_tp_before_sl": 0.72,
+        "expected_ev_bps": 4.0,
+        "blockers": [],
+    }
+    decision = _edge_decision(
+        0.006,
+        selected,
+        extra_evidence={
+            "range_bound_structural_risk": {
+                "long": {
+                    "blockers": [],
+                    "structural_adverse_move_pct": 0.03,
+                    "account_drawdown_fraction": 0.60,
+                }
+            }
+        },
+    )
+    candidate_quality = {
+        "enabled": True,
+        "ready": True,
+        "block": False,
+        "accepted_count": 20,
+        "rejected_count": 100,
+        "min_accepted": 20,
+        "min_rejected": 100,
+    }
+
+    verdict = RiskEngine(settings).evaluate(
+        decision,
+        _market(spread_bps=0.5),
+        PaperBroker(settings).state(),
+        candidate_quality=candidate_quality,
+    )
+
+    assert verdict.allowed
+
+
 def test_risk_blocks_after_daily_target_hit():
     settings = Settings(MIN_CONFIDENCE=0.70, DAILY_TARGET_USD=1)
     broker = PaperBroker(settings)

@@ -354,6 +354,10 @@ class Settings(BaseSettings):
         default=True,
         alias="PAPER_LIVE_ROLLING_EDGE_MONITOR_ENABLED",
     )
+    paper_live_rolling_block_until_ready: bool = Field(
+        default=False,
+        alias="PAPER_LIVE_ROLLING_BLOCK_UNTIL_READY",
+    )
     paper_live_rolling_window: int = Field(default=500, alias="PAPER_LIVE_ROLLING_WINDOW")
     paper_live_rolling_min_accepted: int = Field(default=20, alias="PAPER_LIVE_ROLLING_MIN_ACCEPTED")
     paper_live_rolling_min_rejected: int = Field(default=100, alias="PAPER_LIVE_ROLLING_MIN_REJECTED")
