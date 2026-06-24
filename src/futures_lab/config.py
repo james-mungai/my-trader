@@ -140,6 +140,39 @@ class Settings(BaseSettings):
         default=0.55,
         alias="RANGE_BOUND_CANDIDATE_MAX_ACCOUNT_DRAWDOWN_FRACTION",
     )
+    range_bound_entry_quality_gate_enabled: bool = Field(
+        default=False,
+        alias="RANGE_BOUND_ENTRY_QUALITY_GATE_ENABLED",
+    )
+    range_bound_entry_min_confirmations: int = Field(
+        default=3,
+        alias="RANGE_BOUND_ENTRY_MIN_CONFIRMATIONS",
+    )
+    range_bound_entry_min_flow_alignment: float = Field(
+        default=0.54,
+        alias="RANGE_BOUND_ENTRY_MIN_FLOW_ALIGNMENT",
+    )
+    range_bound_entry_min_pressure_alignment: float = Field(
+        default=0.54,
+        alias="RANGE_BOUND_ENTRY_MIN_PRESSURE_ALIGNMENT",
+    )
+    range_bound_entry_min_ofi_1s: float = Field(default=0.05, alias="RANGE_BOUND_ENTRY_MIN_OFI_1S")
+    range_bound_entry_min_aggression_1s: float = Field(
+        default=0.05,
+        alias="RANGE_BOUND_ENTRY_MIN_AGGRESSION_1S",
+    )
+    range_bound_entry_min_microprice_bps: float = Field(
+        default=0.0,
+        alias="RANGE_BOUND_ENTRY_MIN_MICROPRICE_BPS",
+    )
+    range_bound_entry_max_adverse_return_15s_pct: float = Field(
+        default=0.0006,
+        alias="RANGE_BOUND_ENTRY_MAX_ADVERSE_RETURN_15S_PCT",
+    )
+    range_bound_entry_max_adverse_return_60s_pct: float = Field(
+        default=0.0012,
+        alias="RANGE_BOUND_ENTRY_MAX_ADVERSE_RETURN_60S_PCT",
+    )
     range_bound_time_decay_exit_enabled: bool = Field(
         default=False,
         alias="RANGE_BOUND_TIME_DECAY_EXIT_ENABLED",

@@ -456,20 +456,30 @@ def test_daily_rollover_preserves_range_position_until_natural_close():
     assert broker.open_position is None
 
 
-def _edge_decision(target_move_pct: float, selected: dict, extra_evidence: dict | None = None) -> Decision:
+def _edge_decision(
+    target_move_pct: float,
+    selected: dict,
+    extra_evidence: dict | None = None,
+    action: DecisionAction = DecisionAction.propose_long,
+) -> Decision:
     price = 100.0
     evidence = {"edge_router": {"selected": selected}}
     if extra_evidence:
         evidence.update(extra_evidence)
+    take_profit_price = price * (1 + target_move_pct)
+    stop_loss_price = price * (1 - 0.001)
+    if action == DecisionAction.propose_short:
+        take_profit_price = price * (1 - target_move_pct)
+        stop_loss_price = price * (1 + 0.001)
     return Decision(
         symbol="BTCUSDT",
-        action=DecisionAction.propose_long,
+        action=action,
         mode=TradeMode.fast,
         confidence=0.95,
         reason="test edge",
         entry_price=price,
-        take_profit_price=price * (1 + target_move_pct),
-        stop_loss_price=price * (1 - 0.001),
+        take_profit_price=take_profit_price,
+        stop_loss_price=stop_loss_price,
         target_move_pct=target_move_pct,
         stop_move_pct=0.001,
         leverage=200,
@@ -616,6 +626,140 @@ def test_risk_does_not_soften_range_hard_candidate_blockers():
     joined = " ".join(verdict.blockers)
     assert "btc_microstructure_contradiction" in joined
     assert "range_flow_not_confirmed" not in joined
+
+
+def test_risk_blocks_range_live_paper_when_entry_quality_is_adverse():
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        RANGE_BOUND_ENTRY_QUALITY_GATE_ENABLED=True,
+        RANGE_BOUND_ENTRY_MIN_CONFIRMATIONS=3,
+        RANGE_BOUND_SOFT_CONFIRMATION_BLOCKERS_ENABLED=True,
+        RANGE_BOUND_PAPER_LIVE_MIN_EXPECTED_EV_BPS=1.0,
+        RANGE_BOUND_PAPER_LIVE_MIN_SCORE=0.70,
+        RANGE_BOUND_PAPER_LIVE_MIN_TP_PROBABILITY=0.70,
+    )
+    selected = {
+        "strategy": "range_bound_support_resistance",
+        "family": "range_bound",
+        "side": "long",
+        "score": 0.74,
+        "p_hit_tp_before_sl": 0.72,
+        "expected_ev_bps": 4.0,
+        "blockers": [],
+    }
+    decision = _edge_decision(
+        0.006,
+        selected,
+        extra_evidence={
+            "range_bound_structural_risk": {
+                "long": {
+                    "blockers": [],
+                    "structural_adverse_move_pct": 0.03,
+                    "account_drawdown_fraction": 0.60,
+                }
+            }
+        },
+    )
+
+    verdict = RiskEngine(settings).evaluate(
+        decision,
+        _market(
+            spread_bps=0.5,
+            taker_buy_ratio_10s=0.46,
+            book_imbalance_top=-0.35,
+            depth_imbalance_top5=-0.30,
+            order_flow_imbalance_1s=-0.20,
+            taker_aggression_imbalance_1s=-0.15,
+            microprice_mid_bps=-0.02,
+            return_15s_pct=-0.0010,
+            return_60s_pct=-0.0015,
+        ),
+        PaperBroker(settings).state(),
+    )
+
+    assert not verdict.allowed
+    joined = " ".join(verdict.blockers)
+    assert "range entry quality not confirmed" in joined
+    assert "range entry 15s return is adverse" in joined
+    assert "range entry 60s return is adverse" in joined
+
+
+@pytest.mark.parametrize(
+    ("side", "action", "market_overrides"),
+    [
+        (
+            "long",
+            DecisionAction.propose_long,
+            {
+                "taker_buy_ratio_10s": 0.58,
+                "book_imbalance_top": 0.20,
+                "depth_imbalance_top5": 0.18,
+                "order_flow_imbalance_1s": 0.12,
+                "taker_aggression_imbalance_1s": 0.10,
+                "microprice_mid_bps": 0.03,
+                "return_15s_pct": -0.0002,
+                "return_60s_pct": -0.0003,
+            },
+        ),
+        (
+            "short",
+            DecisionAction.propose_short,
+            {
+                "taker_buy_ratio_10s": 0.42,
+                "book_imbalance_top": -0.20,
+                "depth_imbalance_top5": -0.18,
+                "order_flow_imbalance_1s": -0.12,
+                "taker_aggression_imbalance_1s": -0.10,
+                "microprice_mid_bps": -0.03,
+                "return_15s_pct": 0.0002,
+                "return_60s_pct": 0.0003,
+            },
+        ),
+    ],
+)
+def test_risk_allows_range_live_paper_when_entry_quality_confirms(side, action, market_overrides):
+    settings = Settings(
+        MIN_CONFIDENCE=0.70,
+        PAPER_LIVE_EDGE_GATE_ENABLED=True,
+        RANGE_BOUND_ENTRY_QUALITY_GATE_ENABLED=True,
+        RANGE_BOUND_ENTRY_MIN_CONFIRMATIONS=3,
+        RANGE_BOUND_SOFT_CONFIRMATION_BLOCKERS_ENABLED=True,
+        RANGE_BOUND_PAPER_LIVE_MIN_EXPECTED_EV_BPS=1.0,
+        RANGE_BOUND_PAPER_LIVE_MIN_SCORE=0.70,
+        RANGE_BOUND_PAPER_LIVE_MIN_TP_PROBABILITY=0.70,
+    )
+    selected = {
+        "strategy": "range_bound_support_resistance",
+        "family": "range_bound",
+        "side": side,
+        "score": 0.74,
+        "p_hit_tp_before_sl": 0.72,
+        "expected_ev_bps": 4.0,
+        "blockers": [],
+    }
+    decision = _edge_decision(
+        0.006,
+        selected,
+        extra_evidence={
+            "range_bound_structural_risk": {
+                side: {
+                    "blockers": [],
+                    "structural_adverse_move_pct": 0.03,
+                    "account_drawdown_fraction": 0.60,
+                }
+            }
+        },
+        action=action,
+    )
+
+    verdict = RiskEngine(settings).evaluate(
+        decision,
+        _market(spread_bps=0.5, **market_overrides),
+        PaperBroker(settings).state(),
+    )
+
+    assert verdict.allowed
 
 
 def test_risk_blocks_live_paper_when_rolling_candidate_quality_is_weak():

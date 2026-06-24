@@ -57,6 +57,7 @@ class RiskEngine:
         selected = self._selected_edge_candidate(decision)
         if self._is_range_bound_candidate(selected):
             blockers.extend(self._range_bound_structural_risk_blockers(decision, selected))
+            blockers.extend(self._range_bound_entry_quality_blockers(market, selected))
         elif decision.stop_move_pct is not None and decision.leverage is not None:
             leveraged_stop_loss = decision.stop_move_pct * decision.leverage
             if leveraged_stop_loss > 0.60:
@@ -175,6 +176,92 @@ class RiskEngine:
             )
         return blockers
 
+    def _range_bound_entry_quality_blockers(self, market: MarketState, selected: dict | None) -> list[str]:
+        if not self.settings.range_bound_entry_quality_gate_enabled:
+            return []
+        if not self._is_range_bound_candidate(selected):
+            return []
+        side = str((selected or {}).get("side") or "").lower()
+        if side not in {"long", "short"}:
+            return ["range entry quality side missing"]
+
+        signed = 1.0 if side == "long" else -1.0
+        taker_buy_ratio = self._float_value(market.taker_buy_ratio_10s)
+        flow_alignment = (
+            None
+            if taker_buy_ratio is None
+            else taker_buy_ratio if side == "long" else 1.0 - taker_buy_ratio
+        )
+        book_imbalance = self._float_value(market.book_imbalance_top) or 0.0
+        depth_imbalance = (
+            self._float_value(market.depth_imbalance_top5)
+            if market.depth_imbalance_top5 is not None
+            else book_imbalance
+        )
+        pressure = (book_imbalance + (depth_imbalance or 0.0)) / 2.0
+        pressure_alignment = (
+            self._clamp((pressure + 1.0) / 2.0)
+            if side == "long"
+            else self._clamp((-pressure + 1.0) / 2.0)
+        )
+        ofi_1s = signed * (self._float_value(market.order_flow_imbalance_1s) or 0.0)
+        aggression_1s = signed * (self._float_value(market.taker_aggression_imbalance_1s) or 0.0)
+        microprice_bps = signed * (
+            self._float_value(market.microprice_mid_bps)
+            if market.microprice_mid_bps is not None
+            else self._float_value(market.vamp_mid_bps) or 0.0
+        )
+        return_15s = signed * (self._float_value(market.return_15s_pct) or 0.0)
+        return_60s = signed * (self._float_value(market.return_60s_pct) or 0.0)
+
+        passes: list[str] = []
+        misses: list[str] = []
+        if flow_alignment is not None and flow_alignment >= self.settings.range_bound_entry_min_flow_alignment:
+            passes.append(f"flow={flow_alignment:.3f}")
+        else:
+            misses.append(f"flow={flow_alignment if flow_alignment is not None else 'missing'}")
+        if pressure_alignment >= self.settings.range_bound_entry_min_pressure_alignment:
+            passes.append(f"pressure={pressure_alignment:.3f}")
+        else:
+            misses.append(f"pressure={pressure_alignment:.3f}")
+        if ofi_1s >= self.settings.range_bound_entry_min_ofi_1s:
+            passes.append(f"ofi_1s={ofi_1s:.3f}")
+        else:
+            misses.append(f"ofi_1s={ofi_1s:.3f}")
+        if aggression_1s >= self.settings.range_bound_entry_min_aggression_1s:
+            passes.append(f"aggression_1s={aggression_1s:.3f}")
+        else:
+            misses.append(f"aggression_1s={aggression_1s:.3f}")
+        if microprice_bps >= self.settings.range_bound_entry_min_microprice_bps:
+            passes.append(f"microprice_bps={microprice_bps:.3f}")
+        else:
+            misses.append(f"microprice_bps={microprice_bps:.3f}")
+
+        adverse_15s = return_15s < -abs(self.settings.range_bound_entry_max_adverse_return_15s_pct)
+        adverse_60s = return_60s < -abs(self.settings.range_bound_entry_max_adverse_return_60s_pct)
+        if not adverse_15s:
+            passes.append(f"return_15s={return_15s:.4%}")
+        else:
+            misses.append(f"return_15s={return_15s:.4%}")
+        if not adverse_60s:
+            passes.append(f"return_60s={return_60s:.4%}")
+        else:
+            misses.append(f"return_60s={return_60s:.4%}")
+
+        required = max(1, self.settings.range_bound_entry_min_confirmations)
+        blockers: list[str] = []
+        if adverse_15s:
+            blockers.append("range entry 15s return is adverse")
+        if adverse_60s:
+            blockers.append("range entry 60s return is adverse")
+        if len(passes) < required:
+            blockers.append(
+                "range entry quality not confirmed: "
+                f"confirmations={len(passes)}/{required}; "
+                f"passes={passes}; misses={misses}"
+            )
+        return blockers
+
     def _paper_live_min_expected_ev_bps(self, selected: dict) -> float:
         if self._is_range_bound_candidate(selected):
             return self.settings.range_bound_paper_live_min_expected_ev_bps
@@ -215,4 +302,8 @@ class RiskEngine:
             return float(value) if value is not None else None
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _clamp(value: float) -> float:
+        return max(0.0, min(1.0, value))
 
