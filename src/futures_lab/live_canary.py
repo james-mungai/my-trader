@@ -8,7 +8,7 @@ from typing import Any
 
 from futures_lab.binance_private import BinancePrivateClient, BinancePrivateError
 from futures_lab.config import Settings
-from futures_lab.models import Decision, DecisionAction
+from futures_lab.models import Decision, DecisionAction, PaperTrade
 from futures_lab.runtime import TradingRuntime
 
 
@@ -139,6 +139,8 @@ async def run_live_canary(
     )
     runtime = TradingRuntime.create(settings)
     live_position_open = False
+    current_live_open: dict[str, Any] | None = None
+    pending_live_flatten: dict[str, Any] | None = None
     profit_protection = LiveProfitProtection(previous_close_wallet=Decimal(start_wallet))
     deadline = monotonic() + max(0, seconds)
     interval = max(0.1, settings.decision_interval_ms / 1000)
@@ -184,6 +186,7 @@ async def run_live_canary(
                     if position_check["loss_limit_hit"]:
                         flatten = client.flatten_position(symbol=symbol)
                         live_position_open = False
+                        pending_live_flatten = flatten
                         summary.live_closes += int(bool(flatten.get("live_order_placed")))
                         summary.events.append({"event": "live_flatten_on_intratrade_loss", "payload": flatten})
                         runtime.audit.write("live_canary_flatten", flatten)
@@ -193,13 +196,51 @@ async def run_live_canary(
             closed = runtime.paper.mark(market)
             if closed is not None:
                 summary.paper_closes += 1
-                runtime.audit.write("paper_close", closed.model_dump())
-                runtime.recon_log.write_paper_trade(closed)
                 if live_position_open:
                     flatten = client.flatten_position(symbol=symbol)
                     live_position_open = False
+                    pending_live_flatten = flatten
                     summary.live_closes += int(bool(flatten.get("live_order_placed")))
                     summary.events.append({"event": "live_flatten_on_paper_close", "payload": flatten})
+                    runtime.audit.write("live_canary_flatten", flatten)
+                    closed.live_execution = _live_paper_reconciliation(closed, current_live_open, pending_live_flatten)
+                    runtime.audit.write("live_paper_close_reconciliation", closed.live_execution)
+                    summary.events.append({"event": "live_paper_close_reconciliation", "payload": closed.live_execution})
+                    current_live_open = None
+                    pending_live_flatten = None
+                runtime.audit.write("paper_close", closed.model_dump())
+                runtime.recon_log.write_paper_trade(closed)
+                if closed.live_execution:
+                    live_wallet_after = closed.live_execution.get("live_close_wallet_after")
+                else:
+                    live_wallet_after = None
+                if closed.live_execution and _wallet_loss_exceeded(start_wallet, live_wallet_after, settings.live_daily_max_loss_usd):
+                    summary.stop_reason = "live_daily_max_loss_hit"
+                    break
+                if closed.live_execution:
+                    protection_wallet_after = live_wallet_after
+                else:
+                    protection_wallet_after = None
+                if closed.live_execution:
+                    protection_verdict = _live_profit_protection_check(
+                        settings,
+                        start_wallet=start_wallet,
+                        current_wallet=protection_wallet_after,
+                        state=profit_protection,
+                    )
+                    profit_protection = protection_verdict.state
+                    runtime.audit.write("live_canary_profit_protection", protection_verdict.payload)
+                    summary.events.append({"event": "live_profit_protection", "payload": protection_verdict.payload})
+                    if protection_verdict.stop:
+                        summary.stop_reason = protection_verdict.reason or "live_profit_protection_hit"
+                        break
+                if live_position_open:
+                    # Defensive fallback only; normal live closes are handled above before paper logging.
+                    flatten = client.flatten_position(symbol=symbol)
+                    live_position_open = False
+                    pending_live_flatten = flatten
+                    summary.live_closes += int(bool(flatten.get("live_order_placed")))
+                    summary.events.append({"event": "live_flatten_after_paper_log", "payload": flatten})
                     runtime.audit.write("live_canary_flatten", flatten)
                     if _wallet_loss_exceeded(start_wallet, flatten.get("wallet_balance_after"), settings.live_daily_max_loss_usd):
                         summary.stop_reason = "live_daily_max_loss_hit"
@@ -241,6 +282,8 @@ async def run_live_canary(
             ):
                 live_open = client.live_dust_open(order_side, symbol=symbol)
                 live_position_open = True
+                current_live_open = live_open
+                pending_live_flatten = None
                 summary.live_opens += 1
                 summary.events.append({"event": "live_open", "payload": live_open})
                 runtime.audit.write("live_canary_open", live_open)
@@ -298,6 +341,7 @@ async def run_live_canary(
         if live_position_open:
             flatten = client.flatten_position(symbol=symbol)
             live_position_open = False
+            pending_live_flatten = flatten
             summary.live_closes += int(bool(flatten.get("live_order_placed")))
             summary.events.append({"event": "live_flatten_on_shutdown", "payload": flatten})
             runtime.audit.write("live_canary_flatten", flatten)
@@ -305,6 +349,12 @@ async def run_live_canary(
             closed = runtime.paper.close_open_position(runtime.latest_market, reason="live_canary_session_end")
             if closed is not None:
                 summary.paper_closes += 1
+                if pending_live_flatten is not None:
+                    closed.live_execution = _live_paper_reconciliation(closed, current_live_open, pending_live_flatten)
+                    runtime.audit.write("live_paper_close_reconciliation", closed.live_execution)
+                    summary.events.append({"event": "live_paper_close_reconciliation", "payload": closed.live_execution})
+                    current_live_open = None
+                    pending_live_flatten = None
                 runtime.audit.write("paper_close", closed.model_dump())
                 runtime.recon_log.write_paper_trade(closed)
         await runtime.recorder.stop()
@@ -444,6 +494,12 @@ def _live_position_loss_check(
 
 
 def _filled_notional_usd(live_open: dict[str, Any]) -> float | None:
+    execution = live_open.get("opened_execution") or {}
+    value = execution.get("quote_qty")
+    if value is not None:
+        parsed = float(value)
+        if parsed > 0:
+            return parsed
     order = live_open.get("opened_order") or {}
     for key in ("cumQuote", "cummulativeQuoteQty", "quoteQty"):
         value = order.get(key)
@@ -458,3 +514,62 @@ def _filled_notional_usd(live_open: dict[str, Any]) -> float | None:
         if parsed > 0:
             return parsed
     return None
+
+
+def _live_paper_reconciliation(
+    trade: PaperTrade,
+    live_open: dict[str, Any] | None,
+    live_close: dict[str, Any] | None,
+) -> dict[str, Any]:
+    open_payload = live_open or {}
+    close_payload = live_close or {}
+    open_execution = open_payload.get("opened_execution")
+    close_execution = close_payload.get("close_execution")
+    open_wallet_delta = _decimal_or_none(open_payload.get("wallet_balance_delta_usd"))
+    close_wallet_delta = _decimal_or_none(close_payload.get("wallet_balance_delta_usd"))
+    close_wallet_after = _decimal_or_none(close_payload.get("wallet_balance_after"))
+    live_total_delta = (open_wallet_delta or Decimal("0")) + (close_wallet_delta or Decimal("0"))
+    paper_net = Decimal(str(trade.net_pnl_usd))
+    entry_price = _decimal_or_none(trade.entry_price)
+    exit_price = _decimal_or_none(trade.exit_price)
+    live_entry = _execution_price(open_execution)
+    live_exit = _execution_price(close_execution)
+    direction = Decimal("1") if trade.side.value == "long" else Decimal("-1")
+    return {
+        "symbol": trade.symbol,
+        "side": trade.side.value,
+        "exit_reason": trade.exit_reason,
+        "paper_entry_price": trade.entry_price,
+        "paper_exit_price": trade.exit_price,
+        "paper_notional_usd": trade.notional_usd,
+        "paper_gross_pnl_usd": trade.gross_pnl_usd,
+        "paper_fees_usd": trade.fees_usd,
+        "paper_net_pnl_usd": trade.net_pnl_usd,
+        "live_open_wallet_delta_usd": str(open_wallet_delta.normalize()) if open_wallet_delta is not None else None,
+        "live_close_wallet_delta_usd": str(close_wallet_delta.normalize()) if close_wallet_delta is not None else None,
+        "live_close_wallet_after": str(close_wallet_after.normalize()) if close_wallet_after is not None else None,
+        "live_total_wallet_delta_usd": str(live_total_delta.normalize()),
+        "live_vs_paper_delta_usd": str((live_total_delta - paper_net).normalize()),
+        "live_open_execution": open_execution,
+        "live_close_execution": close_execution,
+        "live_entry_price": str(live_entry.normalize()) if live_entry is not None else None,
+        "live_exit_price": str(live_exit.normalize()) if live_exit is not None else None,
+        "entry_live_favorable_bps": _bps_or_none((entry_price - live_entry) / entry_price * direction)
+        if entry_price and live_entry
+        else None,
+        "exit_live_favorable_bps": _bps_or_none((live_exit - exit_price) / exit_price * direction)
+        if exit_price and live_exit
+        else None,
+    }
+
+
+def _execution_price(execution: dict[str, Any] | None) -> Decimal | None:
+    if not execution:
+        return None
+    return _decimal_or_none(execution.get("effective_avg_price"))
+
+
+def _bps_or_none(value: Decimal | None) -> float | None:
+    if value is None:
+        return None
+    return float(value * Decimal("10000"))

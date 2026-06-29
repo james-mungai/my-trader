@@ -5,11 +5,12 @@ from futures_lab.config import Settings
 from futures_lab.live_canary import (
     LiveProfitProtection,
     _filled_notional_usd,
+    _live_paper_reconciliation,
     _live_profit_protection_check,
     live_order_side_from_decision,
     validate_live_canary_settings,
 )
-from futures_lab.models import Decision, DecisionAction
+from futures_lab.models import Decision, DecisionAction, PaperTrade, Side, TradeMode
 
 
 def _settings(**overrides):
@@ -80,6 +81,16 @@ def test_validate_live_canary_settings_rejects_unsafe_live_config() -> None:
 def test_filled_notional_prefers_actual_cum_quote() -> None:
     assert _filled_notional_usd(
         {
+            "opened_execution": {"quote_qty": "94.25"},
+            "opened_order": {"cumQuote": "93.51"},
+            "order_template": {"estimated_notional_usd": "95.00"},
+        }
+    ) == pytest.approx(94.25)
+
+
+def test_filled_notional_falls_back_to_order_cum_quote() -> None:
+    assert _filled_notional_usd(
+        {
             "opened_order": {"cumQuote": "93.51"},
             "order_template": {"estimated_notional_usd": "95.00"},
         }
@@ -93,6 +104,45 @@ def test_filled_notional_falls_back_to_template() -> None:
             "order_template": {"estimated_notional_usd": "95.00"},
         }
     ) == pytest.approx(95.0)
+
+
+def test_live_paper_reconciliation_records_wallet_delta_gap() -> None:
+    trade = PaperTrade(
+        symbol="ETHUSDT",
+        side=Side.short,
+        mode=TradeMode.fast,
+        trade_profile="range_bound_support_resistance",
+        entry_price=1570.82,
+        exit_price=1570.96,
+        quantity=0.633,
+        stake_usd=100,
+        notional_usd=994.31,
+        leverage=200,
+        gross_pnl_usd=-0.09,
+        fees_usd=0.99,
+        net_pnl_usd=-1.08,
+        exit_reason="time_decay",
+        opened_at="2026-06-29T05:34:10+00:00",
+        closed_at="2026-06-29T05:37:14+00:00",
+    )
+
+    payload = _live_paper_reconciliation(
+        trade,
+        {
+            "wallet_balance_delta_usd": "-0.497",
+            "opened_execution": {"effective_avg_price": "1570.82", "quote_qty": "994.31"},
+        },
+        {
+            "wallet_balance_delta_usd": "-2.619",
+            "wallet_balance_after": "104.474",
+            "close_execution": {"effective_avg_price": "1573.78", "quote_qty": "996.18"},
+        },
+    )
+
+    assert payload["live_total_wallet_delta_usd"] == "-3.116"
+    assert payload["live_close_wallet_after"] == "104.474"
+    assert payload["live_vs_paper_delta_usd"] == "-2.036"
+    assert payload["live_exit_price"] == "1573.78"
 
 
 def test_live_profit_protection_stops_after_consecutive_losses() -> None:
