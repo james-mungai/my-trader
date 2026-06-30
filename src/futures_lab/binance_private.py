@@ -15,6 +15,7 @@ from futures_lab.config import Settings
 
 
 LIVE_FAPI_BASE_URL = "https://fapi.binance.com"
+LIVE_SAPI_BASE_URL = "https://api.binance.com"
 TESTNET_FAPI_BASE_URL = "https://testnet.binancefuture.com"
 
 
@@ -71,6 +72,12 @@ class BinancePrivateClient:
     def open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         symbol = (symbol or self.settings.symbol).strip().upper()
         payload = self._request_json("GET", "/fapi/v1/openOrders", signed=True, params={"symbol": symbol})
+        if not isinstance(payload, list):
+            raise BinancePrivateError(f"Unexpected Binance openOrders payload: {payload}")
+        return payload
+
+    def all_open_orders(self) -> list[dict[str, Any]]:
+        payload = self._request_json("GET", "/fapi/v1/openOrders", signed=True)
         if not isinstance(payload, list):
             raise BinancePrivateError(f"Unexpected Binance openOrders payload: {payload}")
         return payload
@@ -244,6 +251,122 @@ class BinancePrivateClient:
         if not isinstance(payload, dict):
             raise BinancePrivateError(f"Unexpected Binance order payload: {payload}")
         return payload
+
+    def universal_transfer(self, transfer_type: str, *, asset: str = "USDT", amount: Decimal | str | float) -> dict[str, Any]:
+        self._require_live_transfer_settings()
+        normalized_type = transfer_type.strip().upper()
+        if normalized_type not in {"UMFUTURE_FUNDING", "FUNDING_UMFUTURE"}:
+            raise BinancePrivateError("transfer_type must be UMFUTURE_FUNDING or FUNDING_UMFUTURE.")
+        normalized_asset = asset.strip().upper()
+        if normalized_asset != "USDT":
+            raise BinancePrivateError("Only USDT treasury transfers are supported.")
+        transfer_amount = Decimal(str(amount))
+        if transfer_amount <= 0:
+            raise BinancePrivateError("Transfer amount must be positive.")
+        payload = self._request_json(
+            "POST",
+            "/sapi/v1/asset/transfer",
+            signed=True,
+            params={
+                "type": normalized_type,
+                "asset": normalized_asset,
+                "amount": _format_decimal(transfer_amount),
+            },
+            base_url=LIVE_SAPI_BASE_URL,
+        )
+        if not isinstance(payload, dict):
+            raise BinancePrivateError(f"Unexpected Binance transfer payload: {payload}")
+        return payload
+
+    def live_treasury_rebalance(self, *, symbol: str | None = None, reason: str = "manual") -> dict[str, Any]:
+        symbol = (symbol or self.settings.symbol).strip().upper()
+        if not self.settings.live_treasury_rebalance_enabled:
+            account = self.account_probe()
+            return {
+                "ok": True,
+                "enabled": False,
+                "submitted_to_matching_engine": False,
+                "action": "skipped",
+                "reason": "live_treasury_rebalance_disabled",
+                "trigger_reason": reason,
+                "wallet_balance_before": account.get("total_wallet_balance"),
+                "wallet_balance_after": account.get("total_wallet_balance"),
+                "transfer": None,
+            }
+        self._require_live_transfer_settings()
+        account_before = self.account_probe()
+        open_orders = self.all_open_orders()
+        positions = account_before.get("positions") or []
+        nonzero_positions = [item for item in positions if _nonzero_number(item.get("positionAmt"))]
+        if open_orders or nonzero_positions:
+            return {
+                "ok": False,
+                "enabled": True,
+                "submitted_to_matching_engine": False,
+                "action": "blocked",
+                "reason": "account_not_flat",
+                "trigger_reason": reason,
+                "wallet_balance_before": account_before.get("total_wallet_balance"),
+                "wallet_balance_after": account_before.get("total_wallet_balance"),
+                "open_orders_count": len(open_orders),
+                "open_orders": [_summarize_open_order(item) for item in open_orders],
+                "positions": nonzero_positions,
+                "transfer": None,
+            }
+        wallet = Decimal(str(account_before.get("total_wallet_balance") or "0"))
+        target = Decimal(str(self.settings.live_treasury_target_usdt))
+        deadband = abs(Decimal(str(self.settings.live_treasury_deadband_usdt)))
+        min_transfer = max(Decimal("0"), Decimal(str(self.settings.live_treasury_min_transfer_usdt)))
+        max_transfer = max(Decimal("0"), Decimal(str(self.settings.live_treasury_max_transfer_usdt)))
+        asset = self.settings.live_treasury_asset.strip().upper()
+        amount = Decimal("0")
+        transfer_type: str | None = None
+        action = "none"
+        if wallet > target + deadband:
+            amount = wallet - target
+            transfer_type = "UMFUTURE_FUNDING"
+            action = "sweep_excess_to_funding"
+        elif wallet < target - deadband:
+            amount = target - wallet
+            transfer_type = "FUNDING_UMFUTURE"
+            action = "replenish_from_funding"
+        if max_transfer > 0 and amount > max_transfer:
+            amount = max_transfer
+        if amount < min_transfer or transfer_type is None:
+            return {
+                "ok": True,
+                "enabled": True,
+                "submitted_to_matching_engine": False,
+                "action": "no_op",
+                "reason": "within_deadband_or_below_min_transfer",
+                "trigger_reason": reason,
+                "asset": asset,
+                "target_usdt": _format_decimal(target),
+                "deadband_usdt": _format_decimal(deadband),
+                "wallet_balance_before": account_before.get("total_wallet_balance"),
+                "wallet_balance_after": account_before.get("total_wallet_balance"),
+                "planned_amount_usdt": _format_decimal(amount),
+                "transfer": None,
+            }
+        transfer = self.universal_transfer(transfer_type, asset=asset, amount=amount)
+        account_after = self.account_probe()
+        return {
+            "ok": True,
+            "enabled": True,
+            "submitted_to_matching_engine": False,
+            "action": action,
+            "reason": "transferred",
+            "trigger_reason": reason,
+            "asset": asset,
+            "transfer_type": transfer_type,
+            "target_usdt": _format_decimal(target),
+            "deadband_usdt": _format_decimal(deadband),
+            "amount_usdt": _format_decimal(amount),
+            "wallet_balance_before": account_before.get("total_wallet_balance"),
+            "wallet_balance_after": account_after.get("total_wallet_balance"),
+            "available_balance_after": account_after.get("total_available_balance"),
+            "transfer": transfer,
+        }
 
     def live_dust_round_trip(self, side: str, *, symbol: str | None = None) -> dict[str, Any]:
         self._require_live_order_settings()
@@ -512,6 +635,9 @@ class BinancePrivateClient:
                 "live_max_open_positions": self.settings.live_max_open_positions,
                 "live_max_trades_per_day": self.settings.live_max_trades_per_day,
                 "live_daily_max_loss_usd": self.settings.live_daily_max_loss_usd,
+                "live_treasury_rebalance_enabled": self.settings.live_treasury_rebalance_enabled,
+                "live_treasury_target_usdt": self.settings.live_treasury_target_usdt,
+                "live_treasury_deadband_usdt": self.settings.live_treasury_deadband_usdt,
             },
             "hard_failures": hard_failures,
             "warnings": warnings,
@@ -522,6 +648,14 @@ class BinancePrivateClient:
             raise BinancePrivateError("LIVE_TRADING_ENABLED must be true before placing live orders.")
         if self.settings.live_dry_run:
             raise BinancePrivateError("LIVE_DRY_RUN must be false before placing live orders.")
+
+    def _require_live_transfer_settings(self) -> None:
+        if not self.settings.live_treasury_rebalance_enabled:
+            raise BinancePrivateError("LIVE_TREASURY_REBALANCE_ENABLED must be true before transferring funds.")
+        if not self.settings.live_trading_enabled:
+            raise BinancePrivateError("LIVE_TRADING_ENABLED must be true before transferring funds.")
+        if self.settings.live_dry_run:
+            raise BinancePrivateError("LIVE_DRY_RUN must be false before transferring funds.")
 
     def _first_position_risk(self, symbol: str) -> dict[str, Any]:
         rows = self.position_risk(symbol)
@@ -613,14 +747,22 @@ class BinancePrivateClient:
             "positions": positions,
         }
 
-    def _request_json(self, method: str, path: str, *, signed: bool, params: dict[str, Any] | None = None) -> Any:
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        signed: bool,
+        params: dict[str, Any] | None = None,
+        base_url: str | None = None,
+    ) -> Any:
         query: dict[str, Any] = dict(params or {})
         if signed:
             query["timestamp"] = int(time.time() * 1000)
             query["recvWindow"] = 5000
             query["signature"] = _sign_query(query, self.api_secret)
         encoded = urllib.parse.urlencode(query)
-        url = f"{self.base_url}{path}"
+        url = f"{base_url or self.base_url}{path}"
         if encoded:
             url = f"{url}?{encoded}"
         request = urllib.request.Request(

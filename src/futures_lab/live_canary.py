@@ -30,6 +30,10 @@ class LiveCanarySummary:
     final_position: dict[str, Any] | None = None
     open_orders_count: int = 0
     stop_reason: str = "completed"
+    live_realized_pnl_usd: str = "0"
+    treasury_rebalances: int = 0
+    treasury_swept_usdt: str = "0"
+    treasury_replenished_usdt: str = "0"
     events: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -50,6 +54,10 @@ class LiveCanarySummary:
             "final_position": self.final_position,
             "open_orders_count": self.open_orders_count,
             "stop_reason": self.stop_reason,
+            "live_realized_pnl_usd": self.live_realized_pnl_usd,
+            "treasury_rebalances": self.treasury_rebalances,
+            "treasury_swept_usdt": self.treasury_swept_usdt,
+            "treasury_replenished_usdt": self.treasury_replenished_usdt,
             "events": self.events,
         }
 
@@ -128,6 +136,14 @@ async def run_live_canary(
     preflight = client.live_preflight(symbol=symbol)
     if not preflight.get("ok"):
         raise BinancePrivateError(f"Live preflight failed: {preflight.get('hard_failures')}")
+    startup_treasury: dict[str, Any] | None = None
+    if settings.live_treasury_rebalance_enabled:
+        startup_treasury = client.live_treasury_rebalance(symbol=symbol, reason="live_canary_start")
+        if not startup_treasury.get("ok"):
+            raise BinancePrivateError(f"Live treasury rebalance failed: {startup_treasury}")
+        preflight = client.live_preflight(symbol=symbol)
+        if not preflight.get("ok"):
+            raise BinancePrivateError(f"Live preflight failed after treasury rebalance: {preflight.get('hard_failures')}")
 
     start_wallet = str(preflight["account"].get("total_wallet_balance") or "0")
     summary = LiveCanarySummary(
@@ -141,7 +157,9 @@ async def run_live_canary(
     live_position_open = False
     current_live_open: dict[str, Any] | None = None
     pending_live_flatten: dict[str, Any] | None = None
-    profit_protection = LiveProfitProtection(previous_close_wallet=Decimal(start_wallet))
+    live_realized_pnl = Decimal("0")
+    profit_protection_start = Decimal("0") if settings.live_treasury_rebalance_enabled else Decimal(start_wallet)
+    profit_protection = LiveProfitProtection(previous_close_wallet=profit_protection_start)
     deadline = monotonic() + max(0, seconds)
     interval = max(0.1, settings.decision_interval_ms / 1000)
     next_position_check = monotonic()
@@ -160,8 +178,14 @@ async def run_live_canary(
             "live_max_consecutive_losses": settings.live_canary_max_consecutive_losses,
             "live_profit_lock_min_profit_usd": settings.live_canary_profit_lock_min_profit_usd,
             "live_max_profit_giveback_fraction": settings.live_canary_max_profit_giveback_fraction,
+            "live_treasury_rebalance_enabled": settings.live_treasury_rebalance_enabled,
+            "live_treasury_target_usdt": settings.live_treasury_target_usdt,
+            "live_treasury_deadband_usdt": settings.live_treasury_deadband_usdt,
         },
     )
+    if startup_treasury is not None:
+        _record_treasury_rebalance(summary, startup_treasury)
+        runtime.audit.write("live_treasury_rebalance", startup_treasury)
     try:
         while monotonic() < deadline and not (stop_requested is not None and stop_requested.is_set()):
             loop_started = monotonic()
@@ -208,23 +232,27 @@ async def run_live_canary(
                     summary.events.append({"event": "live_paper_close_reconciliation", "payload": closed.live_execution})
                     current_live_open = None
                     pending_live_flatten = None
+                    live_trade_delta = _decimal_or_none(closed.live_execution.get("live_total_wallet_delta_usd"))
+                    if live_trade_delta is not None:
+                        live_realized_pnl += live_trade_delta
+                        summary.live_realized_pnl_usd = str(live_realized_pnl.normalize())
                 runtime.audit.write("paper_close", closed.model_dump())
                 runtime.recon_log.write_paper_trade(closed)
                 if closed.live_execution:
                     live_wallet_after = closed.live_execution.get("live_close_wallet_after")
                 else:
                     live_wallet_after = None
-                if closed.live_execution and _wallet_loss_exceeded(start_wallet, live_wallet_after, settings.live_daily_max_loss_usd):
+                if closed.live_execution and _pnl_loss_exceeded(live_realized_pnl, settings.live_daily_max_loss_usd):
                     summary.stop_reason = "live_daily_max_loss_hit"
                     break
                 if closed.live_execution:
-                    protection_wallet_after = live_wallet_after
+                    protection_wallet_after = live_realized_pnl if settings.live_treasury_rebalance_enabled else live_wallet_after
                 else:
                     protection_wallet_after = None
                 if closed.live_execution:
                     protection_verdict = _live_profit_protection_check(
                         settings,
-                        start_wallet=start_wallet,
+                        start_wallet=profit_protection_start,
                         current_wallet=protection_wallet_after,
                         state=profit_protection,
                     )
@@ -234,6 +262,12 @@ async def run_live_canary(
                     if protection_verdict.stop:
                         summary.stop_reason = protection_verdict.reason or "live_profit_protection_hit"
                         break
+                if closed.live_execution and settings.live_treasury_rebalance_enabled:
+                    rebalance = client.live_treasury_rebalance(symbol=symbol, reason="live_canary_trade_close")
+                    if not rebalance.get("ok"):
+                        raise BinancePrivateError(f"Live treasury rebalance failed: {rebalance}")
+                    _record_treasury_rebalance(summary, rebalance)
+                    runtime.audit.write("live_treasury_rebalance", rebalance)
                 if live_position_open:
                     # Defensive fallback only; normal live closes are handled above before paper logging.
                     flatten = client.flatten_position(symbol=symbol)
@@ -357,6 +391,13 @@ async def run_live_canary(
                     pending_live_flatten = None
                 runtime.audit.write("paper_close", closed.model_dump())
                 runtime.recon_log.write_paper_trade(closed)
+        if settings.live_treasury_rebalance_enabled:
+            rebalance = client.live_treasury_rebalance(symbol=symbol, reason="live_canary_shutdown")
+            if not rebalance.get("ok"):
+                runtime.audit.write("live_treasury_rebalance_failed", rebalance)
+                raise BinancePrivateError(f"Live treasury rebalance failed: {rebalance}")
+            _record_treasury_rebalance(summary, rebalance)
+            runtime.audit.write("live_treasury_rebalance", rebalance)
         await runtime.recorder.stop()
         await runtime.context.stop()
         for event, payload in runtime.paper.close_range_exit_counterfactuals(runtime.latest_market, reason="live_canary_session_end"):
@@ -391,6 +432,25 @@ def _wallet_loss_exceeded(start: object, current: object, max_loss_usd: float) -
     if current is None:
         return False
     return Decimal(str(current)) - Decimal(str(start)) <= -abs(Decimal(str(max_loss_usd)))
+
+
+def _pnl_loss_exceeded(realized_pnl: Decimal, max_loss_usd: float) -> bool:
+    return realized_pnl <= -abs(Decimal(str(max_loss_usd)))
+
+
+def _record_treasury_rebalance(summary: LiveCanarySummary, payload: dict[str, Any]) -> None:
+    summary.events.append({"event": "live_treasury_rebalance", "payload": payload})
+    amount = _decimal_or_none(payload.get("amount_usdt"))
+    if amount is None:
+        return
+    action = payload.get("action")
+    summary.treasury_rebalances += 1
+    if action == "sweep_excess_to_funding":
+        current = Decimal(summary.treasury_swept_usdt)
+        summary.treasury_swept_usdt = str((current + amount).normalize())
+    elif action == "replenish_from_funding":
+        current = Decimal(summary.treasury_replenished_usdt)
+        summary.treasury_replenished_usdt = str((current + amount).normalize())
 
 
 def _live_profit_protection_check(

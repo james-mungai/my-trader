@@ -232,6 +232,17 @@ def binance_flatten_position(symbol: str | None, confirm_live_order: bool) -> No
     print(json.dumps(result, indent=2, default=str))
 
 
+def binance_treasury_rebalance(symbol: str | None, confirm_live_transfer: bool) -> None:
+    if not confirm_live_transfer:
+        raise SystemExit("Refusing to transfer funds without --confirm-live-transfer.")
+    settings = Settings(SYMBOL=symbol) if symbol else Settings()
+    try:
+        result = BinancePrivateClient(settings).live_treasury_rebalance(symbol=symbol, reason="cli")
+    except BinancePrivateError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, indent=2, default=str))
+
+
 async def binance_live_canary(seconds: int, max_trades: int, symbol: str | None, confirm_live_order: bool) -> None:
     if not confirm_live_order:
         raise SystemExit("Refusing to run live canary without --confirm-live-order.")
@@ -361,6 +372,17 @@ def main() -> None:
     flatten_parser.add_argument("--symbol", default=None)
     flatten_parser.add_argument("--confirm-live-order", action="store_true", help="Required. This command can place a real reduce-only order.")
 
+    treasury_parser = sub.add_parser(
+        "binance-treasury-rebalance",
+        help="Flat-only USDT rebalance between Binance USD-M Futures and Funding wallet.",
+    )
+    treasury_parser.add_argument("--symbol", default=None)
+    treasury_parser.add_argument(
+        "--confirm-live-transfer",
+        action="store_true",
+        help="Required. This command can transfer USDT between Binance wallets.",
+    )
+
     live_canary_parser = sub.add_parser(
         "binance-live-canary",
         help="Run a tightly capped live canary that mirrors paper opens/closes with tiny Binance orders.",
@@ -447,6 +469,8 @@ def main() -> None:
         binance_dust_open(args.side, args.symbol, args.confirm_live_order)
     elif args.command == "binance-flatten-position":
         binance_flatten_position(args.symbol, args.confirm_live_order)
+    elif args.command == "binance-treasury-rebalance":
+        binance_treasury_rebalance(args.symbol, args.confirm_live_transfer)
     elif args.command == "binance-live-canary":
         asyncio.run(binance_live_canary(args.seconds, args.max_trades, args.symbol, args.confirm_live_order))
     elif args.command == "latency-probe":

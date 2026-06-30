@@ -4,9 +4,11 @@ from futures_lab.binance_private import BinancePrivateError
 from futures_lab.config import Settings
 from futures_lab.live_canary import (
     LiveProfitProtection,
+    LiveCanarySummary,
     _filled_notional_usd,
     _live_paper_reconciliation,
     _live_profit_protection_check,
+    _record_treasury_rebalance,
     live_order_side_from_decision,
     validate_live_canary_settings,
 )
@@ -194,3 +196,20 @@ def test_live_profit_protection_disabled_tracks_without_stopping() -> None:
 
     assert verdict.stop is False
     assert verdict.state.consecutive_losses == 1
+
+
+def test_record_treasury_rebalance_tracks_sweeps_and_replenishments() -> None:
+    summary = LiveCanarySummary(ok=False, symbol="ETHUSDT", seconds_requested=60, max_trades=1)
+
+    _record_treasury_rebalance(summary, {"action": "sweep_excess_to_funding", "amount_usdt": "4.25"})
+    _record_treasury_rebalance(summary, {"action": "replenish_from_funding", "amount_usdt": "3.5"})
+    _record_treasury_rebalance(summary, {"action": "no_op"})
+
+    assert summary.treasury_rebalances == 2
+    assert summary.treasury_swept_usdt == "4.25"
+    assert summary.treasury_replenished_usdt == "3.5"
+    assert [event["event"] for event in summary.events] == [
+        "live_treasury_rebalance",
+        "live_treasury_rebalance",
+        "live_treasury_rebalance",
+    ]

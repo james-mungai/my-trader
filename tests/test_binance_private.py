@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 
 from futures_lab.binance_private import BinancePrivateClient, BinancePrivateError, _sign_query
@@ -703,3 +705,134 @@ def test_flatten_position_closes_existing_position_reduce_only() -> None:
         }
     ]
     assert result["final_position"]["positionAmt"] == "0.000"
+
+
+def test_universal_transfer_requires_explicit_treasury_settings() -> None:
+    client = BinancePrivateClient(Settings(SYMBOL="ETHUSDT", BINANCE_API_KEY="live-key", BINANCE_API_SECRET="live-secret"))
+
+    with pytest.raises(BinancePrivateError, match="LIVE_TREASURY_REBALANCE_ENABLED"):
+        client.universal_transfer("UMFUTURE_FUNDING", amount="1")
+
+
+def test_live_treasury_rebalance_sweeps_excess_to_funding() -> None:
+    calls = []
+
+    class FakeClient(BinancePrivateClient):
+        account_probe_calls = 0
+
+        def account_probe(self) -> dict:
+            self.account_probe_calls += 1
+            balance = "104.25000000" if self.account_probe_calls == 1 else "100.00000000"
+            return {
+                "total_wallet_balance": balance,
+                "total_available_balance": balance,
+                "positions": [{"symbol": "ETHUSDT", "positionAmt": "0.000", "unrealizedProfit": "0"}],
+            }
+
+        def all_open_orders(self) -> list[dict]:
+            return []
+
+        def universal_transfer(self, transfer_type: str, *, asset: str = "USDT", amount="0") -> dict:
+            calls.append({"type": transfer_type, "asset": asset, "amount": str(amount)})
+            return {"tranId": 123}
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=False,
+            LIVE_TREASURY_REBALANCE_ENABLED=True,
+            LIVE_TREASURY_TARGET_USDT=100,
+            LIVE_TREASURY_DEADBAND_USDT=1,
+            LIVE_TREASURY_MIN_TRANSFER_USDT=1,
+        )
+    )
+
+    result = client.live_treasury_rebalance(reason="test")
+
+    assert result["ok"] is True
+    assert result["action"] == "sweep_excess_to_funding"
+    assert result["transfer_type"] == "UMFUTURE_FUNDING"
+    assert result["amount_usdt"] == "4.25"
+    assert calls[0]["type"] == "UMFUTURE_FUNDING"
+    assert calls[0]["asset"] == "USDT"
+    assert Decimal(calls[0]["amount"]) == Decimal("4.25")
+
+
+def test_live_treasury_rebalance_replenishes_from_funding() -> None:
+    calls = []
+
+    class FakeClient(BinancePrivateClient):
+        account_probe_calls = 0
+
+        def account_probe(self) -> dict:
+            self.account_probe_calls += 1
+            balance = "96.50000000" if self.account_probe_calls == 1 else "100.00000000"
+            return {
+                "total_wallet_balance": balance,
+                "total_available_balance": balance,
+                "positions": [{"symbol": "ETHUSDT", "positionAmt": "0.000", "unrealizedProfit": "0"}],
+            }
+
+        def all_open_orders(self) -> list[dict]:
+            return []
+
+        def universal_transfer(self, transfer_type: str, *, asset: str = "USDT", amount="0") -> dict:
+            calls.append({"type": transfer_type, "asset": asset, "amount": str(amount)})
+            return {"tranId": 456}
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=False,
+            LIVE_TREASURY_REBALANCE_ENABLED=True,
+            LIVE_TREASURY_TARGET_USDT=100,
+            LIVE_TREASURY_DEADBAND_USDT=1,
+            LIVE_TREASURY_MIN_TRANSFER_USDT=1,
+        )
+    )
+
+    result = client.live_treasury_rebalance(reason="test")
+
+    assert result["ok"] is True
+    assert result["action"] == "replenish_from_funding"
+    assert result["transfer_type"] == "FUNDING_UMFUTURE"
+    assert result["amount_usdt"] == "3.5"
+    assert calls[0]["type"] == "FUNDING_UMFUTURE"
+    assert calls[0]["asset"] == "USDT"
+    assert Decimal(calls[0]["amount"]) == Decimal("3.5")
+
+
+def test_live_treasury_rebalance_blocks_when_account_not_flat() -> None:
+    class FakeClient(BinancePrivateClient):
+        def account_probe(self) -> dict:
+            return {
+                "total_wallet_balance": "104.25000000",
+                "total_available_balance": "104.25000000",
+                "positions": [{"symbol": "ETHUSDT", "positionAmt": "0.012", "unrealizedProfit": "0"}],
+            }
+
+        def all_open_orders(self) -> list[dict]:
+            return []
+
+    client = FakeClient(
+        Settings(
+            SYMBOL="ETHUSDT",
+            BINANCE_API_KEY="live-key",
+            BINANCE_API_SECRET="live-secret",
+            LIVE_TRADING_ENABLED=True,
+            LIVE_DRY_RUN=False,
+            LIVE_TREASURY_REBALANCE_ENABLED=True,
+        )
+    )
+
+    result = client.live_treasury_rebalance(reason="test")
+
+    assert result["ok"] is False
+    assert result["action"] == "blocked"
+    assert result["reason"] == "account_not_flat"

@@ -485,6 +485,12 @@ class Settings(BaseSettings):
         default=0.50,
         alias="LIVE_CANARY_MAX_PROFIT_GIVEBACK_FRACTION",
     )
+    live_treasury_rebalance_enabled: bool = Field(default=False, alias="LIVE_TREASURY_REBALANCE_ENABLED")
+    live_treasury_asset: str = Field(default="USDT", alias="LIVE_TREASURY_ASSET")
+    live_treasury_target_usdt: float = Field(default=100.0, alias="LIVE_TREASURY_TARGET_USDT")
+    live_treasury_deadband_usdt: float = Field(default=1.0, alias="LIVE_TREASURY_DEADBAND_USDT")
+    live_treasury_min_transfer_usdt: float = Field(default=1.0, alias="LIVE_TREASURY_MIN_TRANSFER_USDT")
+    live_treasury_max_transfer_usdt: float = Field(default=500.0, alias="LIVE_TREASURY_MAX_TRANSFER_USDT")
 
     binance_api_key: str | None = Field(default=None, alias="BINANCE_API_KEY")
     binance_api_secret: str | None = Field(default=None, alias="BINANCE_API_SECRET")
