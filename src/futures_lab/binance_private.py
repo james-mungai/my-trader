@@ -96,42 +96,6 @@ class BinancePrivateClient:
             raise BinancePrivateError(f"Unexpected Binance positionRisk payload: {payload}")
         return payload
 
-    def order_status(
-        self,
-        *,
-        symbol: str | None = None,
-        order_id: int | str | None = None,
-        orig_client_order_id: str | None = None,
-    ) -> dict[str, Any]:
-        symbol = (symbol or self.settings.symbol).strip().upper()
-        params: dict[str, Any] = {"symbol": symbol}
-        if order_id is not None:
-            params["orderId"] = order_id
-        if orig_client_order_id:
-            params["origClientOrderId"] = orig_client_order_id
-        if "orderId" not in params and "origClientOrderId" not in params:
-            raise BinancePrivateError("order_status requires order_id or orig_client_order_id.")
-        payload = self._request_json("GET", "/fapi/v1/order", signed=True, params=params)
-        if not isinstance(payload, dict):
-            raise BinancePrivateError(f"Unexpected Binance order payload: {payload}")
-        return payload
-
-    def user_trades(
-        self,
-        *,
-        symbol: str | None = None,
-        order_id: int | str | None = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        symbol = (symbol or self.settings.symbol).strip().upper()
-        params: dict[str, Any] = {"symbol": symbol, "limit": limit}
-        if order_id is not None:
-            params["orderId"] = order_id
-        payload = self._request_json("GET", "/fapi/v1/userTrades", signed=True, params=params)
-        if not isinstance(payload, list):
-            raise BinancePrivateError(f"Unexpected Binance userTrades payload: {payload}")
-        return payload
-
     def exchange_info(self) -> dict[str, Any]:
         payload = self._request_json("GET", "/fapi/v1/exchangeInfo", signed=False)
         if not isinstance(payload, dict):
@@ -467,7 +431,6 @@ class BinancePrivateClient:
             reduce_only=False,
             client_order_prefix="FL_DUST_OPEN_ONLY",
         )
-        opened_execution = self._filled_order_execution(symbol, opened_order)
         position_after_open = self._wait_for_position(symbol, expected_nonzero=True, timeout_seconds=10.0)
         after_account = self.account_probe()
         open_orders = self.open_orders(symbol)
@@ -483,7 +446,6 @@ class BinancePrivateClient:
             "side": side,
             "order_template": order_template,
             "opened_order": _summarize_order_response(opened_order),
-            "opened_execution": opened_execution,
             "position_after_open": position_after_open,
             "open_orders_count": len(open_orders),
             "wallet_balance_before": before_account.get("total_wallet_balance"),
@@ -520,7 +482,6 @@ class BinancePrivateClient:
             reduce_only=True,
             client_order_prefix="FL_FLATTEN",
         )
-        close_execution = self._filled_order_execution(symbol, close_order)
         final_position = self._wait_for_position(symbol, expected_nonzero=False, timeout_seconds=10.0)
         after_account = self.account_probe()
         open_orders = self.open_orders(symbol)
@@ -536,7 +497,6 @@ class BinancePrivateClient:
             "symbol": symbol,
             "position_before": _summarize_position_risk(position_before),
             "close_order": _summarize_order_response(close_order),
-            "close_execution": close_execution,
             "final_position": final_position,
             "open_orders_count": len(open_orders),
             "open_orders": [_summarize_open_order(item) for item in open_orders],
@@ -675,29 +635,6 @@ class BinancePrivateClient:
             time.sleep(0.5)
         expected = "non-zero" if expected_nonzero else "flat"
         raise BinancePrivateError(f"Timed out waiting for {symbol} position to become {expected}. Last={last}")
-
-    def _filled_order_execution(self, symbol: str, order: dict[str, Any] | None) -> dict[str, Any] | None:
-        if order is None:
-            return None
-        summarized = _summarize_order_execution(order, trades=[])
-        if summarized.get("effective_avg_price") is not None and summarized.get("quote_qty") is not None:
-            return summarized
-        errors: list[str] = []
-        refreshed_order = order
-        trades: list[dict[str, Any]] = []
-        order_id = order.get("orderId")
-        try:
-            refreshed_order = self.order_status(symbol=symbol, order_id=order_id)
-        except Exception as exc:  # pragma: no cover - defensive logging path
-            errors.append(f"order_status: {exc}")
-        try:
-            trades = self.user_trades(symbol=symbol, order_id=order_id, limit=50)
-        except Exception as exc:  # pragma: no cover - defensive logging path
-            errors.append(f"user_trades: {exc}")
-        enriched = _summarize_order_execution(refreshed_order, trades=trades)
-        if errors:
-            enriched["lookup_errors"] = errors
-        return enriched
 
     def account_probe(self) -> dict[str, Any]:
         server_time = self.server_time_ms()
@@ -871,76 +808,6 @@ def _summarize_order_response(order: dict[str, Any] | None) -> dict[str, Any] | 
         "positionSide": order.get("positionSide"),
         "updateTime": order.get("updateTime"),
     }
-
-
-def _summarize_order_execution(order: dict[str, Any], *, trades: list[dict[str, Any]]) -> dict[str, Any]:
-    executed_qty = _decimal_or_none(order.get("executedQty"))
-    cum_quote = _decimal_or_none(order.get("cumQuote"))
-    avg_price = _positive_decimal_or_none(order.get("avgPrice"))
-    trade_qty = Decimal("0")
-    trade_quote = Decimal("0")
-    trade_commission = Decimal("0")
-    trade_realized_pnl = Decimal("0")
-    commission_assets: set[str] = set()
-    trade_ids: list[Any] = []
-    for trade in trades:
-        qty = _decimal_or_none(trade.get("qty")) or Decimal("0")
-        price = _decimal_or_none(trade.get("price")) or Decimal("0")
-        quote = _decimal_or_none(trade.get("quoteQty"))
-        if quote is None:
-            quote = qty * price
-        trade_qty += qty
-        trade_quote += quote
-        trade_commission += _decimal_or_none(trade.get("commission")) or Decimal("0")
-        trade_realized_pnl += _decimal_or_none(trade.get("realizedPnl")) or Decimal("0")
-        if trade.get("commissionAsset"):
-            commission_assets.add(str(trade.get("commissionAsset")))
-        if trade.get("id") is not None:
-            trade_ids.append(trade.get("id"))
-
-    if avg_price is None and cum_quote is not None and executed_qty not in {None, Decimal("0")}:
-        avg_price = cum_quote / executed_qty
-    if avg_price is None and trade_quote > 0 and trade_qty > 0:
-        avg_price = trade_quote / trade_qty
-    quote_qty = cum_quote if cum_quote not in {None, Decimal("0")} else (trade_quote if trade_quote > 0 else None)
-    filled_qty = executed_qty if executed_qty not in {None, Decimal("0")} else (trade_qty if trade_qty > 0 else None)
-    return {
-        "orderId": order.get("orderId"),
-        "symbol": order.get("symbol"),
-        "status": order.get("status"),
-        "side": order.get("side"),
-        "type": order.get("type"),
-        "reduceOnly": order.get("reduceOnly"),
-        "clientOrderId": order.get("clientOrderId"),
-        "orig_qty": _format_decimal(_decimal_or_none(order.get("origQty")) or Decimal("0")),
-        "filled_qty": _format_decimal(filled_qty) if filled_qty is not None else None,
-        "quote_qty": _format_decimal(quote_qty) if quote_qty is not None else None,
-        "effective_avg_price": _format_decimal(avg_price) if avg_price is not None else None,
-        "order_avg_price": order.get("avgPrice"),
-        "order_cum_quote": order.get("cumQuote"),
-        "trade_count": len(trades),
-        "trade_ids": trade_ids[:10],
-        "commission": _format_decimal(trade_commission) if trades else None,
-        "commission_assets": sorted(commission_assets),
-        "realized_pnl": _format_decimal(trade_realized_pnl) if trades else None,
-        "updateTime": order.get("updateTime"),
-    }
-
-
-def _decimal_or_none(value: object) -> Decimal | None:
-    if value is None:
-        return None
-    try:
-        return Decimal(str(value))
-    except Exception:
-        return None
-
-
-def _positive_decimal_or_none(value: object) -> Decimal | None:
-    parsed = _decimal_or_none(value)
-    if parsed is None or parsed <= 0:
-        return None
-    return parsed
 
 
 def _nonzero_number(value: object) -> bool:
