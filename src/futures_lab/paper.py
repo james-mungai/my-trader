@@ -400,6 +400,9 @@ class PaperBroker:
 
     def _emergency_adverse_limit(self, pos: PaperPosition) -> float:
         limit = abs(self.settings.emergency_max_adverse_move_pct)
+        if pos.trade_profile == "first_touch_micro_momentum":
+            configured_stop = abs(pos.stop_loss_price - pos.entry_price) / pos.entry_price
+            return max(limit, configured_stop)
         if (
             pos.trade_profile == "range_bound_support_resistance"
             and pos.structural_adverse_move_pct is not None
@@ -409,6 +412,8 @@ class PaperBroker:
         return limit
 
     def _should_close_fast_failure(self, pos: PaperPosition, current: datetime) -> bool:
+        if pos.trade_profile == "first_touch_micro_momentum":
+            return False
         if not self.settings.enable_fast_failure_exit:
             return False
         if pos.mode.value != "fast":
@@ -479,6 +484,8 @@ class PaperBroker:
         return ((price - pos.entry_price) / pos.entry_price) * direction
 
     def _exit_policy_for_profile(self, trade_profile: str) -> str:
+        if trade_profile == "first_touch_micro_momentum":
+            return "fixed_tp_stop"
         policy = self.settings.paper_exit_policy.strip().lower()
         if policy != "mfe_trailing_stop":
             return "fixed_tp_stop"

@@ -55,7 +55,6 @@ class ReconLogger:
             sample_interval > 1
             and self._decision_rows % sample_interval != 0
             and not risk.allowed
-            and decision.action.value == "wait"
         ):
             return
         self._write(

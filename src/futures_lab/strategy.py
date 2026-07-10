@@ -35,6 +35,9 @@ class HitAndRunStrategy:
 
     def decide(self, market: MarketState) -> Decision:
         variant = self.settings.strategy_variant.strip().lower()
+        if self._is_first_touch_variant(variant):
+            return self._decide_first_touch(market, variant)
+
         blockers = self._blockers(market, variant=variant)
         evidence = self._evidence(market)
         sequence_snapshot = self._sequence_snapshot(market)
@@ -923,6 +926,86 @@ class HitAndRunStrategy:
             blockers.append("missing taker flow")
         if market.regime == Regime.volatile and not self._is_first_touch_variant(variant):
             blockers.append("volatility regime too unstable")
+        return blockers
+
+    def _decide_first_touch(self, market: MarketState, variant: str) -> Decision:
+        blockers = self._first_touch_blockers(market)
+        signal = self._first_touch_micro_signal(market)
+        evidence = {
+            "strategy_variant": variant,
+            "first_touch_micro": self._first_touch_micro_evidence(market),
+            "freshness": {
+                "data_age_seconds": market.data_age_seconds,
+                "book_lag_ms": market.book_freshness_lag_ms,
+                "trade_lag_ms": market.trade_freshness_lag_ms,
+            },
+            "effective_cost": estimate_effective_cost(self.settings, market).model_dump(),
+        }
+        if blockers:
+            return Decision(
+                symbol=market.symbol,
+                action=DecisionAction.wait,
+                confidence=0.0,
+                reason="; ".join(blockers),
+                evidence=evidence,
+            )
+
+        long_score, short_score = self._score_first_touch_micro(market)
+        if signal == 0.0 or max(long_score, short_score) < self.settings.min_confidence:
+            return Decision(
+                symbol=market.symbol,
+                action=DecisionAction.wait,
+                confidence=max(long_score, short_score),
+                reason="first-touch micro signal below threshold",
+                evidence=evidence,
+            )
+
+        side = "long" if signal > 0 else "short"
+        action = DecisionAction.propose_long if side == "long" else DecisionAction.propose_short
+        confidence = long_score if side == "long" else short_score
+        profile = self._trade_profile(TradeMode.fast, None, side, variant=variant, market=market)
+        return self._build_trade_decision(
+            market=market,
+            action=action,
+            profile=profile,
+            confidence=confidence,
+            reason=f"First-touch {side}: side-neutral microstructure pressure selected the first barrier.",
+            evidence=evidence,
+        )
+
+    def _first_touch_blockers(self, market: MarketState) -> list[str]:
+        blockers: list[str] = []
+        if not market.connected:
+            blockers.append("stream disconnected")
+        if market.observed_seconds < self.settings.first_touch_warmup_seconds:
+            blockers.append(
+                "first-touch warmup: "
+                f"{market.observed_seconds:.0f}s < {self.settings.first_touch_warmup_seconds}s"
+            )
+        if market.mid_price is None:
+            blockers.append("missing mid price")
+        if market.data_age_seconds is None or market.data_age_seconds > self.settings.stale_after_seconds:
+            blockers.append("market data stale")
+        if market.spread_bps is None or market.spread_bps > self.settings.max_spread_bps:
+            blockers.append(f"spread not tradable: {market.spread_bps}")
+        book_lag_ms = market.book_freshness_lag_ms
+        if book_lag_ms is not None and book_lag_ms > self.settings.max_exchange_event_lag_ms:
+            blockers.append(f"book exchange event lag too high: {book_lag_ms:.0f}ms")
+        trade_lag_ms = market.trade_freshness_lag_ms
+        if trade_lag_ms is not None and trade_lag_ms > self.settings.max_exchange_event_lag_ms:
+            blockers.append(f"trade exchange event lag too high: {trade_lag_ms:.0f}ms")
+
+        required_features = {
+            "order_flow_imbalance_1s": market.order_flow_imbalance_1s,
+            "order_flow_imbalance_5s": market.order_flow_imbalance_5s,
+            "taker_aggression_imbalance_1s": market.taker_aggression_imbalance_1s,
+            "taker_aggression_imbalance_5s": market.taker_aggression_imbalance_5s,
+            "microprice_mid_bps": market.microprice_mid_bps,
+            "depth_imbalance_top5": market.depth_imbalance_top5,
+        }
+        missing = [name for name, value in required_features.items() if value is None]
+        if missing:
+            blockers.append(f"missing first-touch features: {','.join(missing)}")
         return blockers
 
     def _score_first_touch_micro(self, market: MarketState) -> tuple[float, float]:

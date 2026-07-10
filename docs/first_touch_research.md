@@ -59,10 +59,25 @@ The matching paper strategy is `STRATEGY_VARIANT=first_touch_micro_momentum`. It
 logged as signal strength, not as a probability. A first-touch candidate remains blocked from the
 paper-live edge gate until an out-of-sample probability calibration is promoted separately.
 
+The strategy now has a dedicated decision path. It does not evaluate range, HTF, Markov, session
+bias, cross-market, or edge-router rules. Its live paper exit is always the configured fixed target,
+fixed stop, or vertical timeout; generic emergency and fast-failure exits cannot pre-empt the
+configured first-touch stop. Exit-shadow policies remain observational.
+
 For a 100 USDT research account, `ACCOUNT_EQUITY_USD=100`, `STAKE_FRACTION=0.033`, and
 `FIRST_TOUCH_LEVERAGE=150` produce approximately 495 USDT notional, or 4.95x effective account
 exposure. Exchange leverage controls required initial margin; notional divided by account equity
 controls economic exposure and drawdown.
+
+## Lightweight Paper Profile
+
+Use `deployments/aws/first-touch-paper.env.example` as the non-secret base profile. The profile keeps
+the ETH depth, aggregate-trade, mark-price, and one-minute kline streams required for the study. It
+disables BTC cross-market data, liquidation events, OI/HTF polling, and unrelated outcome trackers.
+
+Blocked decisions are sampled at the same cadence as waits. Allowed entries, paper opens, and paper
+closes are always retained. This prevents an open position from generating a full rejected proposal
+and large evidence payload every second.
 
 ## Promotion Rules
 

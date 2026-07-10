@@ -119,6 +119,53 @@ def test_first_touch_risk_uses_actual_account_notional() -> None:
     assert "account risk per trade too high" in " ".join(blocked.blockers)
 
 
+def test_first_touch_uses_fixed_barriers_without_legacy_early_exits() -> None:
+    settings = Settings(
+        EMERGENCY_MAX_ADVERSE_MOVE_PCT=0.004,
+        ENABLE_FAST_FAILURE_EXIT=True,
+        FAST_FAILURE_SECONDS=180,
+        PAPER_EXIT_POLICY="mfe_trailing_stop",
+        PAPER_MFE_TRAILING_PROFILES="",
+        MAX_POSITION_SECONDS=21_600,
+    )
+    decision = Decision(
+        symbol="ETHUSDT",
+        action=DecisionAction.propose_long,
+        mode=TradeMode.fast,
+        confidence=0.6,
+        reason="first-touch test",
+        entry_price=100.0,
+        take_profit_price=100.6,
+        stop_loss_price=99.3,
+        target_move_pct=0.006,
+        stop_move_pct=0.007,
+        leverage=150,
+        stake_usd=3.3,
+        notional_usd=495.0,
+        evidence={"trade_profile": "first_touch_micro_momentum"},
+    )
+    broker = PaperBroker(settings)
+    opened_at = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+    position = broker.open_from_decision(decision, opened_at=opened_at)
+
+    assert position is not None
+    assert position.exit_policy == "fixed_tp_stop"
+    assert (
+        broker.mark(
+            _market(99.5, symbol="ETHUSDT"),
+            timestamp=opened_at + timedelta(seconds=181),
+        )
+        is None
+    )
+
+    closed = broker.mark(
+        _market(99.29, symbol="ETHUSDT"),
+        timestamp=opened_at + timedelta(seconds=182),
+    )
+    assert closed is not None
+    assert closed.exit_reason == "stop_loss"
+
+
 def test_paper_fast_trade_hits_target_after_fees():
     settings = Settings(MIN_CONFIDENCE=0.70, PAPER_LIVE_EDGE_GATE_ENABLED=False)
     market = _market(100.0)

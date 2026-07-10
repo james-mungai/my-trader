@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     first_touch_target_move_pct: float = Field(default=0.0060, alias="FIRST_TOUCH_TARGET_MOVE_PCT")
     first_touch_stop_move_pct: float = Field(default=0.0070, alias="FIRST_TOUCH_STOP_MOVE_PCT")
     first_touch_leverage: int = Field(default=150, alias="FIRST_TOUCH_LEVERAGE")
+    first_touch_warmup_seconds: int = Field(default=15, alias="FIRST_TOUCH_WARMUP_SECONDS")
     first_touch_min_abs_micro_signal: float = Field(
         default=0.0,
         alias="FIRST_TOUCH_MIN_ABS_MICRO_SIGNAL",

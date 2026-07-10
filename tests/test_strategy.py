@@ -155,6 +155,53 @@ def test_first_touch_micro_momentum_is_side_neutral(sign, expected_action):
     assert decision.stop_move_pct == pytest.approx(0.007)
     assert decision.leverage == 150
     assert decision.evidence["first_touch_micro"]["score_is_probability"] is False
+    assert "edge_router" not in decision.evidence
+    assert "higher_timeframe_context" not in decision.evidence
+
+
+def test_first_touch_uses_only_fresh_microstructure_inputs():
+    settings = Settings(
+        MIN_CONFIDENCE=0.50,
+        STRATEGY_VARIANT="first_touch_micro_momentum",
+        EDGE_ROUTER_SHADOW_ENABLED=True,
+        ENABLE_MARKOV_STATE_MACHINE=True,
+        HIGHER_TIMEFRAME_ENABLED=True,
+        CROSS_MARKET_ENABLED=True,
+    )
+    market = _market(
+        regime=Regime.volatile,
+        range_position_180s=None,
+        taker_buy_ratio_10s=None,
+        order_flow_imbalance_1s=0.80,
+        order_flow_imbalance_5s=0.50,
+        taker_aggression_imbalance_1s=0.75,
+        taker_aggression_imbalance_5s=0.45,
+        microprice_mid_bps=0.30,
+        vamp_mid_bps=0.25,
+        depth_imbalance_top5=0.55,
+        avg_book_event_lag_30s_ms=100,
+        avg_trade_event_lag_30s_ms=120,
+        higher_timeframe_bias_side="short",
+        higher_timeframe_bias_strength=1.0,
+        btc_order_flow_imbalance_1s=-1.0,
+    )
+
+    decision = HitAndRunStrategy(settings).decide(market)
+
+    assert decision.action == DecisionAction.propose_long
+    assert set(decision.evidence) == {
+        "strategy_variant",
+        "first_touch_micro",
+        "freshness",
+        "effective_cost",
+        "trade_profile",
+    }
+
+    lagged = HitAndRunStrategy(settings).decide(
+        market.model_copy(update={"avg_trade_event_lag_30s_ms": 2_500})
+    )
+    assert lagged.action == DecisionAction.wait
+    assert "trade exchange event lag too high" in lagged.reason
 
 
 def test_liquidity_sweep_reversal_proposes_long_after_low_reclaim():
