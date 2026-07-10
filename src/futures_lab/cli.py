@@ -3,6 +3,7 @@ import asyncio
 import json
 import signal
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from futures_lab.audit import AuditLog
 from futures_lab.binance_private import BinancePrivateClient, BinancePrivateError
@@ -16,6 +17,7 @@ from futures_lab.data_ops import (
     summarize_range_exit_counterfactuals,
     summarize_regime_outcomes,
 )
+from futures_lab.first_touch import run_first_touch_study
 from futures_lab.latency_probe import build_probe_streams, run_latency_probe
 from futures_lab.live_canary import run_live_canary
 from futures_lab.replay import discover_raw_files, replay_files
@@ -417,6 +419,27 @@ def main() -> None:
 
     sub.add_parser("range-exit-counterfactual-summary", help="Summarize range time-decay hindsight outcomes.")
 
+    first_touch_parser = sub.add_parser(
+        "first-touch-study",
+        help="Run a purged chronological +/- barrier study over stored feature and mark-price logs.",
+    )
+    first_touch_parser.add_argument("--runs-root", type=Path, default=Path("/app/data/runs"))
+    first_touch_parser.add_argument("--symbol", default="ETHUSDT")
+    first_touch_parser.add_argument("--target-bps", type=float, default=60.0)
+    first_touch_parser.add_argument(
+        "--stop-bps",
+        type=float,
+        nargs="+",
+        default=[40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 120.0, 150.0, 450.0],
+    )
+    first_touch_parser.add_argument("--cost-bps", type=float, default=10.0)
+    first_touch_parser.add_argument("--horizon-seconds", type=int, default=21_600)
+    first_touch_parser.add_argument("--sample-seconds", type=int, default=60)
+    first_touch_parser.add_argument("--max-gap-seconds", type=int, default=5)
+    first_touch_parser.add_argument("--train-fraction", type=float, default=0.70)
+    first_touch_parser.add_argument("--account-exposure", type=float, default=20.0)
+    first_touch_parser.add_argument("--max-selected-stop-bps", type=float, default=150.0)
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -513,6 +536,25 @@ def main() -> None:
         print(json.dumps(summarize_exit_shadow(Settings()).model_dump(), indent=2))
     elif args.command == "range-exit-counterfactual-summary":
         print(json.dumps(summarize_range_exit_counterfactuals(Settings()).model_dump(), indent=2))
+    elif args.command == "first-touch-study":
+        print(
+            json.dumps(
+                run_first_touch_study(
+                    args.runs_root,
+                    symbol=args.symbol,
+                    target_bps=args.target_bps,
+                    stop_bps_values=args.stop_bps,
+                    cost_bps=args.cost_bps,
+                    horizon_seconds=args.horizon_seconds,
+                    sample_seconds=args.sample_seconds,
+                    max_gap_seconds=args.max_gap_seconds,
+                    train_fraction=args.train_fraction,
+                    account_exposure=args.account_exposure,
+                    max_selected_stop_bps=args.max_selected_stop_bps,
+                ),
+                indent=2,
+            )
+        )
     elif args.command == "compress-raw":
         print(
             json.dumps(
