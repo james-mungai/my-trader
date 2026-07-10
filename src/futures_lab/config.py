@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     range_bound_target_move_pct: float = Field(default=0.0060, alias="RANGE_BOUND_TARGET_MOVE_PCT")
     range_bound_stop_move_pct: float = Field(default=0.0025, alias="RANGE_BOUND_STOP_MOVE_PCT")
     range_bound_leverage: int = Field(default=200, alias="RANGE_BOUND_LEVERAGE")
+    first_touch_target_move_pct: float = Field(default=0.0060, alias="FIRST_TOUCH_TARGET_MOVE_PCT")
+    first_touch_stop_move_pct: float = Field(default=0.0070, alias="FIRST_TOUCH_STOP_MOVE_PCT")
+    first_touch_leverage: int = Field(default=150, alias="FIRST_TOUCH_LEVERAGE")
+    first_touch_min_abs_micro_signal: float = Field(
+        default=0.0,
+        alias="FIRST_TOUCH_MIN_ABS_MICRO_SIGNAL",
+    )
     range_bound_timeframes: str = Field(default="15m,30m,1h", alias="RANGE_BOUND_TIMEFRAMES")
     range_bound_min_room_to_target_pct: float = Field(default=0.0055, alias="RANGE_BOUND_MIN_ROOM_TO_TARGET_PCT")
     range_bound_edge_zone: float = Field(default=0.28, alias="RANGE_BOUND_EDGE_ZONE")
@@ -369,6 +376,10 @@ class Settings(BaseSettings):
 
     account_equity_usd: float = Field(default=1000.0, alias="ACCOUNT_EQUITY_USD")
     stake_fraction: float = Field(default=0.15, alias="STAKE_FRACTION")
+    max_account_risk_per_trade_fraction: float = Field(
+        default=0.10,
+        alias="MAX_ACCOUNT_RISK_PER_TRADE_FRACTION",
+    )
     fast_leverage: int = Field(default=200, alias="FAST_LEVERAGE")
     slow_leverage: int = Field(default=80, alias="SLOW_LEVERAGE")
     maker_fee_bps: float = Field(default=2.0, alias="MAKER_FEE_BPS")

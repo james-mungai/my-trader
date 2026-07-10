@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, field
 
 from futures_lab.config import Settings
@@ -34,7 +35,7 @@ class HitAndRunStrategy:
 
     def decide(self, market: MarketState) -> Decision:
         variant = self.settings.strategy_variant.strip().lower()
-        blockers = self._blockers(market)
+        blockers = self._blockers(market, variant=variant)
         evidence = self._evidence(market)
         sequence_snapshot = self._sequence_snapshot(market)
         if sequence_snapshot is not None:
@@ -71,7 +72,19 @@ class HitAndRunStrategy:
             liquidation_bias=liquidation_bias,
         )
         long_score, short_score = self._apply_session_bias(long_score, short_score, evidence)
-        long_score, short_score = self._apply_higher_timeframe_context(long_score, short_score, market, evidence)
+        if self._is_first_touch_variant(variant):
+            evidence["higher_timeframe_context"] = {
+                "bias_side": market.higher_timeframe_bias_side,
+                "bias_strength": market.higher_timeframe_bias_strength,
+                "bias_reason": market.higher_timeframe_bias_reason,
+                "age_seconds": market.higher_timeframe_context_age_seconds,
+                "stale": self._higher_timeframe_context_stale(market),
+                "timeframes": market.higher_timeframe_context.get("timeframes", {}),
+                "role": "logged_context_not_entry_score",
+            }
+            evidence["first_touch_micro"] = self._first_touch_micro_evidence(market)
+        else:
+            long_score, short_score = self._apply_higher_timeframe_context(long_score, short_score, market, evidence)
         evidence["cross_market_context"] = self._cross_market_context_evidence(market)
         stateful_filter = self._stateful_momentum_filter(variant, sequence_snapshot, market, long_score, short_score)
         if stateful_filter is not None:
@@ -111,7 +124,7 @@ class HitAndRunStrategy:
                 evidence=evidence | {"strategy_variant": variant, "long_score": long_score, "short_score": short_score},
             )
 
-        short_blockers = self._short_blockers(market)
+        short_blockers = [] if self._is_first_touch_variant(variant) else self._short_blockers(market)
         if short_score >= self._required_score("short", long_score, stateful_filter):
             if short_blockers:
                 return Decision(
@@ -159,6 +172,23 @@ class HitAndRunStrategy:
         short_score: float,
     ) -> BaselineCandidateInput:
         side = Side.long if long_score >= short_score else Side.short
+        if self._is_first_touch_variant(variant):
+            return BaselineCandidateInput(
+                side=side,
+                score=max(long_score, short_score),
+                target_bps=self.settings.first_touch_target_move_pct * 10_000,
+                stop_bps=self.settings.first_touch_stop_move_pct * 10_000,
+                max_hold_ms=max(60_000, int(self.settings.max_position_seconds or 21_600) * 1_000),
+                strategy="first_touch_micro_momentum",
+                family="first_touch_micro_momentum",
+                prefer_selected=True,
+                use_micro_confirmation=False,
+                extra_blockers=["first_touch_probability_uncalibrated"],
+                reasons=[
+                    "side-neutral microstructure first-touch candidate",
+                    "score_is_probability=false",
+                ],
+            )
         if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
             structural = self._range_bound_structural_risk(side.value, market)
             range_quality = self._range_bound_candidate_quality(side.value, market, structural)
@@ -874,7 +904,7 @@ class HitAndRunStrategy:
     ) -> str:
         return f"{symbol.upper()}:{side}:{snapshot.state.value}:{profile}"
 
-    def _blockers(self, market: MarketState) -> list[str]:
+    def _blockers(self, market: MarketState, variant: str = "") -> list[str]:
         blockers = []
         if not market.connected:
             blockers.append("stream disconnected")
@@ -891,9 +921,47 @@ class HitAndRunStrategy:
             blockers.append("missing range position")
         if market.taker_buy_ratio_10s is None:
             blockers.append("missing taker flow")
-        if market.regime == Regime.volatile:
+        if market.regime == Regime.volatile and not self._is_first_touch_variant(variant):
             blockers.append("volatility regime too unstable")
         return blockers
+
+    def _score_first_touch_micro(self, market: MarketState) -> tuple[float, float]:
+        signal = self._first_touch_micro_signal(market)
+        strength = abs(signal)
+        if strength <= self.settings.first_touch_min_abs_micro_signal:
+            return 0.0, 0.0
+        confidence = self._clamp(self.settings.min_confidence + (1.0 - self.settings.min_confidence) * strength)
+        if signal > 0:
+            return round(confidence, 4), 0.0
+        return 0.0, round(confidence, 4)
+
+    def _first_touch_micro_signal(self, market: MarketState) -> float:
+        return (
+            0.24 * (market.order_flow_imbalance_1s or 0.0)
+            + 0.14 * (market.order_flow_imbalance_5s or 0.0)
+            + 0.20 * (market.taker_aggression_imbalance_1s or 0.0)
+            + 0.10 * (market.taker_aggression_imbalance_5s or 0.0)
+            + 0.08 * math.tanh(market.microprice_mid_bps or 0.0)
+            + 0.06 * math.tanh(market.vamp_mid_bps or 0.0)
+            + 0.10 * (market.depth_imbalance_top5 or 0.0)
+            + 0.08 * (market.book_imbalance_top or 0.0)
+        )
+
+    def _first_touch_micro_evidence(self, market: MarketState) -> dict:
+        signal = self._first_touch_micro_signal(market)
+        return {
+            "signal": round(signal, 6),
+            "signal_strength": round(abs(signal), 6),
+            "side": "long" if signal > 0 else "short" if signal < 0 else "neutral",
+            "min_abs_signal": self.settings.first_touch_min_abs_micro_signal,
+            "score_is_probability": False,
+            "target_move_pct": self.settings.first_touch_target_move_pct,
+            "stop_move_pct": self.settings.first_touch_stop_move_pct,
+        }
+
+    @staticmethod
+    def _is_first_touch_variant(variant: str) -> bool:
+        return variant in {"first_touch_micro_momentum", "first_touch_momentum", "micro_first_touch"}
 
     def _apply_session_bias(self, long_score: float, short_score: float, evidence: dict) -> tuple[float, float]:
         side = self.settings.session_bias_side.strip().lower()
@@ -1004,6 +1072,16 @@ class HitAndRunStrategy:
                 {
                     "long": "Stateful momentum long: confirmed continuation after impulse, pullback, and reclaim.",
                     "short": "Stateful momentum short: confirmed continuation after impulse, bounce, and rejection.",
+                },
+            )
+        if self._is_first_touch_variant(variant):
+            long_score, short_score = self._score_first_touch_micro(market)
+            return (
+                long_score,
+                short_score,
+                {
+                    "long": "First-touch micro-momentum long: side-neutral order-flow and book pressure point upward.",
+                    "short": "First-touch micro-momentum short: side-neutral order-flow and book pressure point downward.",
                 },
             )
         if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
@@ -1943,6 +2021,14 @@ class HitAndRunStrategy:
         variant: str = "",
         market: MarketState | None = None,
     ) -> TradeProfile:
+        if self._is_first_touch_variant(variant):
+            return TradeProfile(
+                name="first_touch_micro_momentum",
+                mode=TradeMode.fast,
+                target_move_pct=self.settings.first_touch_target_move_pct,
+                stop_move_pct=self.settings.first_touch_stop_move_pct,
+                leverage=self.settings.first_touch_leverage,
+            )
         if variant in {"range_bound_support_resistance", "range_bound", "range_gambler"}:
             structural = self._range_bound_structural_risk(side, market) if market is not None else {}
             return TradeProfile(

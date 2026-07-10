@@ -55,6 +55,15 @@ A side-neutral micro-momentum rule was the strongest recent candidate at a 60 bp
 bps stop, but it is not yet proven across regimes. It should be validated with controlled exposure,
 real fill costs, and rolling out-of-sample monitoring before notional is increased.
 
+The matching paper strategy is `STRATEGY_VARIANT=first_touch_micro_momentum`. Its score is explicitly
+logged as signal strength, not as a probability. A first-touch candidate remains blocked from the
+paper-live edge gate until an out-of-sample probability calibration is promoted separately.
+
+For a 100 USDT research account, `ACCOUNT_EQUITY_USD=100`, `STAKE_FRACTION=0.033`, and
+`FIRST_TOUCH_LEVERAGE=150` produce approximately 495 USDT notional, or 4.95x effective account
+exposure. Exchange leverage controls required initial margin; notional divided by account equity
+controls economic exposure and drawdown.
+
 ## Promotion Rules
 
 A strategy is not promoted because it has the highest backtest return. It must satisfy all of the

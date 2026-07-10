@@ -119,6 +119,44 @@ def test_strategy_blocks_short_when_30s_taker_flow_is_buy_biased():
     assert "30s taker buy ratio" in decision.reason
 
 
+@pytest.mark.parametrize(
+    ("sign", "expected_action"),
+    [
+        (1.0, DecisionAction.propose_long),
+        (-1.0, DecisionAction.propose_short),
+    ],
+)
+def test_first_touch_micro_momentum_is_side_neutral(sign, expected_action):
+    strategy = HitAndRunStrategy(
+        Settings(
+            MIN_CONFIDENCE=0.50,
+            STRATEGY_VARIANT="first_touch_micro_momentum",
+            EDGE_ROUTER_SHADOW_ENABLED=False,
+        )
+    )
+
+    decision = strategy.decide(
+        _market(
+            regime=Regime.volatile,
+            order_flow_imbalance_1s=0.80 * sign,
+            order_flow_imbalance_5s=0.50 * sign,
+            taker_aggression_imbalance_1s=0.75 * sign,
+            taker_aggression_imbalance_5s=0.45 * sign,
+            microprice_mid_bps=0.30 * sign,
+            vamp_mid_bps=0.25 * sign,
+            depth_imbalance_top5=0.55 * sign,
+            book_imbalance_top=0.40 * sign,
+            taker_buy_ratio_30s=0.80 if sign < 0 else 0.20,
+        )
+    )
+
+    assert decision.action == expected_action
+    assert decision.target_move_pct == pytest.approx(0.006)
+    assert decision.stop_move_pct == pytest.approx(0.007)
+    assert decision.leverage == 150
+    assert decision.evidence["first_touch_micro"]["score_is_probability"] is False
+
+
 def test_liquidity_sweep_reversal_proposes_long_after_low_reclaim():
     strategy = HitAndRunStrategy(Settings(MIN_CONFIDENCE=0.70, STRATEGY_VARIANT="liquidity_sweep_reversal"))
 

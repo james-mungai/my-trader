@@ -58,10 +58,19 @@ class RiskEngine:
         if self._is_range_bound_candidate(selected):
             blockers.extend(self._range_bound_structural_risk_blockers(decision, selected))
             blockers.extend(self._range_bound_entry_quality_blockers(market, selected))
-        elif decision.stop_move_pct is not None and decision.leverage is not None:
-            leveraged_stop_loss = decision.stop_move_pct * decision.leverage
-            if leveraged_stop_loss > 0.60:
-                blockers.append(f"leveraged stop risks {leveraged_stop_loss:.1%} of stake")
+        elif decision.stop_move_pct is not None and decision.notional_usd is not None:
+            effective_cost = estimate_effective_cost(self.settings, market)
+            account_equity = max(0.000001, self.settings.account_equity_usd)
+            account_risk_fraction = (
+                (decision.stop_move_pct + effective_cost.total_cost_pct)
+                * decision.notional_usd
+                / account_equity
+            )
+            if account_risk_fraction > self.settings.max_account_risk_per_trade_fraction:
+                blockers.append(
+                    "account risk per trade too high: "
+                    f"{account_risk_fraction:.1%} > {self.settings.max_account_risk_per_trade_fraction:.1%}"
+                )
 
         if blockers:
             return RiskVerdict(allowed=False, reason="Risk blocked proposal.", blockers=blockers)

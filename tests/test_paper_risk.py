@@ -87,6 +87,38 @@ def test_risk_blocks_non_trade_decision():
     assert "wait/close" in verdict.blockers[0]
 
 
+def test_first_touch_risk_uses_actual_account_notional() -> None:
+    settings = Settings(
+        ACCOUNT_EQUITY_USD=100,
+        STAKE_FRACTION=0.033,
+        MIN_CONFIDENCE=0.50,
+        STRATEGY_VARIANT="first_touch_micro_momentum",
+        EDGE_ROUTER_SHADOW_ENABLED=False,
+        PAPER_LIVE_EDGE_GATE_ENABLED=False,
+        PAPER_LIVE_ROLLING_EDGE_MONITOR_ENABLED=False,
+        MAX_ACCOUNT_RISK_PER_TRADE_FRACTION=0.05,
+    )
+    market = _market(
+        order_flow_imbalance_1s=0.80,
+        order_flow_imbalance_5s=0.50,
+        taker_aggression_imbalance_1s=0.75,
+        taker_aggression_imbalance_5s=0.45,
+        microprice_mid_bps=0.30,
+        vamp_mid_bps=0.25,
+        depth_imbalance_top5=0.55,
+    )
+    decision = HitAndRunStrategy(settings).decide(market)
+
+    verdict = RiskEngine(settings).evaluate(decision, market, PaperBroker(settings).state())
+
+    assert decision.notional_usd == pytest.approx(495)
+    assert verdict.allowed is True
+
+    tight = settings.model_copy(update={"max_account_risk_per_trade_fraction": 0.03})
+    blocked = RiskEngine(tight).evaluate(decision, market, PaperBroker(tight).state())
+    assert "account risk per trade too high" in " ".join(blocked.blockers)
+
+
 def test_paper_fast_trade_hits_target_after_fees():
     settings = Settings(MIN_CONFIDENCE=0.70, PAPER_LIVE_EDGE_GATE_ENABLED=False)
     market = _market(100.0)
