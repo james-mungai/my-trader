@@ -94,3 +94,8 @@ def test_loaders_deduplicate_overlapping_run_data(tmp_path) -> None:
     assert mark_stats["unique_mark_price_points"] == 3
     assert len(features) == 1
     assert feature_stats["feature_rows_read"] == 2
+
+    direct_timeline, _ = load_mark_price_timeline(runs / "one", symbol="ETHUSDT", max_gap_seconds=2)
+    direct_features, _ = load_feature_samples(runs / "one", symbol="ETHUSDT", sample_seconds=60)
+    assert len(direct_timeline.times_ms) == 3
+    assert len(direct_features) == 1

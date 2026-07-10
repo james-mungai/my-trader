@@ -335,7 +335,7 @@ def load_mark_price_timeline(
     symbol: str,
     max_gap_seconds: int,
 ) -> tuple[PriceTimeline, dict[str, Any]]:
-    paths = sorted(runs_root.glob(f"*/raw_ws/{symbol}_markPriceUpdate_*.jsonl*"))
+    paths = _run_files(runs_root, f"raw_ws/{symbol}_markPriceUpdate_*.jsonl*")
     points: dict[int, float] = {}
     rows_read = 0
     for path in paths:
@@ -372,7 +372,7 @@ def load_feature_samples(
     symbol: str,
     sample_seconds: int,
 ) -> tuple[list[tuple[int, dict[str, Any]]], dict[str, Any]]:
-    paths = sorted(runs_root.glob(f"*/features/{symbol}_features_*.jsonl*"))
+    paths = _run_files(runs_root, f"features/{symbol}_features_*.jsonl*")
     buckets: dict[int, tuple[int, dict[str, Any], int]] = {}
     rows_read = 0
     bucket_ms = max(1, sample_seconds) * 1000
@@ -818,6 +818,12 @@ def _jsonl_rows(path: Path) -> Iterable[dict[str, Any]]:
                 continue
             if isinstance(row, dict):
                 yield row
+
+
+def _run_files(runs_root: Path, relative_pattern: str) -> list[Path]:
+    if (runs_root / "raw_ws").is_dir() or (runs_root / "features").is_dir():
+        return sorted(runs_root.glob(relative_pattern))
+    return sorted(runs_root.glob(f"*/{relative_pattern}"))
 
 
 def _timestamp_ms(value: Any) -> int | None:
