@@ -24,6 +24,7 @@ from futures_lab.live_canary import run_live_canary
 from futures_lab.market_atlas import run_market_atlas
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.readiness import evaluate_readiness
+from futures_lab.regime_atlas import run_regime_atlas
 from futures_lab.runtime import TradingRuntime
 from futures_lab.shadow_arena import ShadowArena, ShadowArenaConfig, summarize_shadow_arena
 from futures_lab.strategy_tournament import run_strategy_tournament
@@ -559,6 +560,20 @@ def main() -> None:
     exit_lab_parser.add_argument("--bootstrap-samples", type=int, default=2_000)
     exit_lab_parser.add_argument("--output", type=Path, default=None)
 
+    regime_atlas_parser = sub.add_parser(
+        "regime-atlas",
+        help="Test side-neutral permission regimes on the locked squeeze-entry cohort.",
+    )
+    regime_atlas_parser.add_argument("--runs-root", type=Path, default=Path("/app/data/runs"))
+    regime_atlas_parser.add_argument("--symbol", default="ETHUSDT")
+    regime_atlas_parser.add_argument("--cost-bps", type=float, default=10.0)
+    regime_atlas_parser.add_argument("--sample-seconds", type=int, default=60)
+    regime_atlas_parser.add_argument("--max-gap-seconds", type=int, default=5)
+    regime_atlas_parser.add_argument("--account-exposure", type=float, default=4.95)
+    regime_atlas_parser.add_argument("--matched-coin-seeds", type=int, default=32)
+    regime_atlas_parser.add_argument("--bootstrap-samples", type=int, default=2_000)
+    regime_atlas_parser.add_argument("--output", type=Path, default=None)
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -727,6 +742,24 @@ def main() -> None:
             print(encoded)
     elif args.command == "exit-laboratory":
         report = run_exit_laboratory(
+            args.runs_root,
+            symbol=args.symbol,
+            cost_bps=args.cost_bps,
+            sample_seconds=args.sample_seconds,
+            max_gap_seconds=args.max_gap_seconds,
+            account_exposure=args.account_exposure,
+            matched_coin_seeds=args.matched_coin_seeds,
+            bootstrap_samples=args.bootstrap_samples,
+        )
+        encoded = json.dumps(report, indent=2)
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+            print(json.dumps({"output": str(args.output), "bytes": args.output.stat().st_size}, indent=2))
+        else:
+            print(encoded)
+    elif args.command == "regime-atlas":
+        report = run_regime_atlas(
             args.runs_root,
             symbol=args.symbol,
             cost_bps=args.cost_bps,
