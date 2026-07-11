@@ -17,6 +17,7 @@ from futures_lab.data_ops import (
     summarize_range_exit_counterfactuals,
     summarize_regime_outcomes,
 )
+from futures_lab.exit_laboratory import run_exit_laboratory
 from futures_lab.first_touch import run_first_touch_study
 from futures_lab.latency_probe import build_probe_streams, run_latency_probe
 from futures_lab.live_canary import run_live_canary
@@ -544,6 +545,20 @@ def main() -> None:
     tournament_parser.add_argument("--matched-coin-seeds", type=int, default=32)
     tournament_parser.add_argument("--output", type=Path, default=None)
 
+    exit_lab_parser = sub.add_parser(
+        "exit-laboratory",
+        help="Compare deterministic exits on one locked squeeze-entry cohort.",
+    )
+    exit_lab_parser.add_argument("--runs-root", type=Path, default=Path("/app/data/runs"))
+    exit_lab_parser.add_argument("--symbol", default="ETHUSDT")
+    exit_lab_parser.add_argument("--cost-bps", type=float, default=10.0)
+    exit_lab_parser.add_argument("--sample-seconds", type=int, default=60)
+    exit_lab_parser.add_argument("--max-gap-seconds", type=int, default=5)
+    exit_lab_parser.add_argument("--account-exposure", type=float, default=4.95)
+    exit_lab_parser.add_argument("--matched-coin-seeds", type=int, default=32)
+    exit_lab_parser.add_argument("--bootstrap-samples", type=int, default=2_000)
+    exit_lab_parser.add_argument("--output", type=Path, default=None)
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -702,6 +717,24 @@ def main() -> None:
             max_gap_seconds=args.max_gap_seconds,
             account_exposure=args.account_exposure,
             matched_coin_seeds=args.matched_coin_seeds,
+        )
+        encoded = json.dumps(report, indent=2)
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+            print(json.dumps({"output": str(args.output), "bytes": args.output.stat().st_size}, indent=2))
+        else:
+            print(encoded)
+    elif args.command == "exit-laboratory":
+        report = run_exit_laboratory(
+            args.runs_root,
+            symbol=args.symbol,
+            cost_bps=args.cost_bps,
+            sample_seconds=args.sample_seconds,
+            max_gap_seconds=args.max_gap_seconds,
+            account_exposure=args.account_exposure,
+            matched_coin_seeds=args.matched_coin_seeds,
+            bootstrap_samples=args.bootstrap_samples,
         )
         encoded = json.dumps(report, indent=2)
         if args.output is not None:
