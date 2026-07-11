@@ -1,4 +1,5 @@
 .venv/
+.venv-research/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -15,5 +16,8 @@ data/raw_ws/
 data/*.log
 data/*.jsonl
 data/reports/
+.jupyter/
+.jupyter-token
+.ipynb_checkpoints/
 
 .DS_Store
