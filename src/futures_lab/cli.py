@@ -27,6 +27,7 @@ from futures_lab.market_atlas import run_market_atlas
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.readiness import evaluate_readiness
 from futures_lab.regime_atlas import run_regime_atlas
+from futures_lab.robustness_lab import run_robustness_promotion_lab
 from futures_lab.runtime import TradingRuntime
 from futures_lab.shadow_arena import ShadowArena, ShadowArenaConfig, summarize_shadow_arena
 from futures_lab.strategy_tournament import run_strategy_tournament
@@ -605,6 +606,23 @@ def main() -> None:
     ensemble_parser.add_argument("--bootstrap-samples", type=int, default=2_000)
     ensemble_parser.add_argument("--output", type=Path, default=None)
 
+    robustness_parser = sub.add_parser(
+        "robustness-lab",
+        help="Stress the ungated squeeze and evaluate a frozen forward-promotion scorecard.",
+    )
+    robustness_parser.add_argument("--runs-root", type=Path, default=Path("/app/data/runs"))
+    robustness_parser.add_argument("--forward-summary", type=Path, default=None)
+    robustness_parser.add_argument("--symbol", default="ETHUSDT")
+    robustness_parser.add_argument("--cost-bps", type=float, default=10.0)
+    robustness_parser.add_argument("--sample-seconds", type=int, default=60)
+    robustness_parser.add_argument("--max-gap-seconds", type=int, default=5)
+    robustness_parser.add_argument("--account-exposure", type=float, default=4.95)
+    robustness_parser.add_argument("--path-trades", type=int, default=100)
+    robustness_parser.add_argument("--bootstrap-paths", type=int, default=5_000)
+    robustness_parser.add_argument("--block-size", type=int, default=5)
+    robustness_parser.add_argument("--random-seed", type=int, default=73)
+    robustness_parser.add_argument("--output", type=Path, default=None)
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -836,6 +854,27 @@ def main() -> None:
             account_exposure=args.account_exposure,
             matched_coin_seeds=args.matched_coin_seeds,
             bootstrap_samples=args.bootstrap_samples,
+        )
+        encoded = json.dumps(report, indent=2)
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+            print(json.dumps({"output": str(args.output), "bytes": args.output.stat().st_size}, indent=2))
+        else:
+            print(encoded)
+    elif args.command == "robustness-lab":
+        report = run_robustness_promotion_lab(
+            args.runs_root,
+            forward_summary_path=args.forward_summary,
+            symbol=args.symbol,
+            cost_bps=args.cost_bps,
+            sample_seconds=args.sample_seconds,
+            max_gap_seconds=args.max_gap_seconds,
+            account_exposure=args.account_exposure,
+            path_trades=args.path_trades,
+            bootstrap_paths=args.bootstrap_paths,
+            block_size=args.block_size,
+            random_seed=args.random_seed,
         )
         encoded = json.dumps(report, indent=2)
         if args.output is not None:
