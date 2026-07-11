@@ -23,6 +23,7 @@ from futures_lab.live_canary import run_live_canary
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.readiness import evaluate_readiness
 from futures_lab.runtime import TradingRuntime
+from futures_lab.shadow_arena import ShadowArena, ShadowArenaConfig, summarize_shadow_arena
 
 
 def _record_deadline(seconds: int, *, current: datetime | None = None) -> datetime:
@@ -73,6 +74,64 @@ async def watch(seconds: int, quiet: bool = False) -> None:
             await asyncio.wait_for(asyncio.shield(runtime.stop()), timeout=settings.shutdown_timeout_seconds)
         except TimeoutError:
             print("Timed out while stopping runtime; event loop shutdown will cancel remaining tasks.")
+
+
+async def shadow_arena(
+    seconds: int,
+    quiet: bool,
+    target_bps: float,
+    stop_bps: float,
+    cost_bps: float,
+    horizon_seconds: int,
+    cooldown_seconds: int,
+    warmup_seconds: int,
+    max_trades_per_arm: int,
+) -> None:
+    settings = Settings()
+    config = ShadowArenaConfig(
+        target_bps=target_bps,
+        stop_bps=stop_bps,
+        cost_bps=cost_bps,
+        horizon_seconds=horizon_seconds,
+        cooldown_seconds=cooldown_seconds,
+        warmup_seconds=warmup_seconds,
+        max_trades_per_arm=max_trades_per_arm,
+    )
+    arena = ShadowArena(settings, config)
+    stop_requested = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_requested.set)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop_requested.set))
+    arena.start()
+    try:
+        deadline = _record_deadline(seconds)
+        while (remaining := _deadline_remaining_seconds(deadline)) > 0 and not stop_requested.is_set():
+            try:
+                await asyncio.wait_for(stop_requested.wait(), timeout=min(1, remaining))
+                break
+            except TimeoutError:
+                pass
+            market = arena.tick()
+            if not quiet:
+                print(
+                    {
+                        "symbol": market.symbol,
+                        "mark": market.mark_price,
+                        "data_age_seconds": market.data_age_seconds,
+                        "arms": arena.summary()["arms"],
+                    }
+                )
+            if arena.all_arms_complete():
+                break
+    finally:
+        try:
+            await asyncio.wait_for(asyncio.shield(arena.stop()), timeout=settings.shutdown_timeout_seconds)
+        except TimeoutError:
+            print("Timed out while stopping shadow arena; event loop shutdown will cancel remaining tasks.")
+    print(json.dumps(arena.summary(), indent=2, default=str))
 
 
 def replay(
@@ -300,6 +359,22 @@ def main() -> None:
     record_parser.add_argument("--seconds", type=int, default=1800)
     record_parser.add_argument("--quiet", action="store_true")
 
+    arena_parser = sub.add_parser(
+        "shadow-arena",
+        help="Run independent squeeze, micro-momentum, and fair-coin paper ledgers on one public feed.",
+    )
+    arena_parser.add_argument("--seconds", type=int, default=172_800)
+    arena_parser.add_argument("--quiet", action="store_true")
+    arena_parser.add_argument("--target-bps", type=float, default=60.0)
+    arena_parser.add_argument("--stop-bps", type=float, default=60.0)
+    arena_parser.add_argument("--cost-bps", type=float, default=10.0)
+    arena_parser.add_argument("--horizon-seconds", type=int, default=21_600)
+    arena_parser.add_argument("--cooldown-seconds", type=int, default=60)
+    arena_parser.add_argument("--warmup-seconds", type=int, default=180)
+    arena_parser.add_argument("--max-trades-per-arm", type=int, default=300)
+
+    sub.add_parser("shadow-arena-summary", help="Summarize forward shadow-arena outcomes and checkpoints.")
+
     replay_parser = sub.add_parser("replay", help="Replay recorded raw WebSocket JSONL.")
     replay_parser.add_argument("--pattern", default=None, help="Glob under data/raw_ws, e.g. BTCUSDT_*_2026-05-03.jsonl")
     replay_parser.add_argument("--decision-interval-ms", type=int, default=None)
@@ -453,6 +528,22 @@ def main() -> None:
         asyncio.run(watch(args.seconds, quiet=args.quiet))
     elif args.command == "record":
         asyncio.run(watch(args.seconds, quiet=args.quiet))
+    elif args.command == "shadow-arena":
+        asyncio.run(
+            shadow_arena(
+                args.seconds,
+                args.quiet,
+                args.target_bps,
+                args.stop_bps,
+                args.cost_bps,
+                args.horizon_seconds,
+                args.cooldown_seconds,
+                args.warmup_seconds,
+                args.max_trades_per_arm,
+            )
+        )
+    elif args.command == "shadow-arena-summary":
+        print(json.dumps(summarize_shadow_arena(Settings()), indent=2, default=str))
     elif args.command == "replay":
         replay(
             pattern=args.pattern,
