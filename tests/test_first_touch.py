@@ -6,6 +6,11 @@ import numpy as np
 from futures_lab.first_touch import (
     PriceTimeline,
     _evaluate_predictions,
+    _flow_exhaustion_signal,
+    _impulse_pullback_signal,
+    _persistent_micro_signal,
+    _squeeze_breakout_signal,
+    _strategy_family_signal,
     break_even_win_rate,
     label_samples,
     load_feature_samples,
@@ -99,3 +104,88 @@ def test_loaders_deduplicate_overlapping_run_data(tmp_path) -> None:
     direct_features, _ = load_feature_samples(runs / "one", symbol="ETHUSDT", sample_seconds=60)
     assert len(direct_timeline.times_ms) == 3
     assert len(direct_features) == 1
+
+
+def test_persistent_micro_requires_multi_horizon_agreement() -> None:
+    row = _aligned_micro_row()
+
+    assert _persistent_micro_signal(row) > 0
+
+    row["order_flow_imbalance_1s"] = -0.8
+    row["order_flow_imbalance_5s"] = -0.8
+    row["taker_aggression_imbalance_1s"] = -0.8
+    row["taker_aggression_imbalance_5s"] = -0.8
+    row["taker_aggression_imbalance_15s"] = -0.8
+
+    assert _persistent_micro_signal(row) == 0.0
+
+    row["microprice_mid_bps"] = -0.5
+    row["vamp_mid_bps"] = -0.4
+    row["depth_imbalance_top5"] = -0.5
+    row["book_imbalance_top"] = -0.4
+
+    assert _persistent_micro_signal(row) < 0
+
+
+def test_impulse_pullback_keeps_the_impulse_side() -> None:
+    row = _aligned_micro_row()
+    row.update(
+        {
+            "return_180s_pct": 0.0012,
+            "return_60s_pct": 0.0002,
+            "return_15s_pct": -0.0002,
+        }
+    )
+
+    assert _impulse_pullback_signal(row) > 0
+
+
+def test_flow_exhaustion_reverses_absorbed_impulse() -> None:
+    row = _aligned_micro_row()
+    row.update(
+        {
+            "return_180s_pct": 0.0015,
+            "return_15s_pct": 0.0,
+            "taker_aggression_imbalance_5s": 0.8,
+            "taker_aggression_imbalance_15s": 0.8,
+            "microprice_mid_bps": -1.0,
+            "vamp_mid_bps": -1.0,
+            "depth_imbalance_top5": -0.5,
+            "book_imbalance_top": -0.5,
+        }
+    )
+
+    assert _flow_exhaustion_signal(row) < 0
+    assert _strategy_family_signal(row) < 0
+
+
+def test_squeeze_breakout_requires_range_edge_and_persistent_flow() -> None:
+    row = _aligned_micro_row()
+    row.update(
+        {
+            "range_180s_pct": 0.0010,
+            "range_position_180s": 0.90,
+            "return_15s_pct": 0.0001,
+        }
+    )
+
+    assert _squeeze_breakout_signal(row) > 0
+
+
+def _aligned_micro_row() -> dict[str, float]:
+    return {
+        "order_flow_imbalance_1s": 0.8,
+        "order_flow_imbalance_5s": 0.7,
+        "taker_aggression_imbalance_1s": 0.8,
+        "taker_aggression_imbalance_5s": 0.7,
+        "taker_aggression_imbalance_15s": 0.6,
+        "microprice_mid_bps": 0.5,
+        "vamp_mid_bps": 0.4,
+        "depth_imbalance_top5": 0.5,
+        "book_imbalance_top": 0.4,
+        "return_15s_pct": 0.0,
+        "return_60s_pct": 0.0,
+        "return_180s_pct": 0.0,
+        "range_180s_pct": 0.002,
+        "range_position_180s": 0.5,
+    }

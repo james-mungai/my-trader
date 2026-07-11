@@ -515,6 +515,11 @@ def _deterministic_predictions(samples: list[LabeledSample]) -> dict[str, list[i
         "range_reversion": [],
         "range_reversion_micro_confirmed": [],
         "micro_momentum": [],
+        "micro_persistence": [],
+        "impulse_pullback": [],
+        "flow_exhaustion_reversal": [],
+        "volatility_squeeze_breakout": [],
+        "strategy_family_router": [],
         "htf_momentum": [],
         "regime_router": [],
     }
@@ -533,6 +538,11 @@ def _deterministic_predictions(samples: list[LabeledSample]) -> dict[str, list[i
         rows["range_reversion"].append(range_side)
         rows["range_reversion_micro_confirmed"].append(range_side if range_side == micro_side else None)
         rows["micro_momentum"].append(micro_side)
+        rows["micro_persistence"].append(_side(_persistent_micro_signal(row)))
+        rows["impulse_pullback"].append(_side(_impulse_pullback_signal(row)))
+        rows["flow_exhaustion_reversal"].append(_side(_flow_exhaustion_signal(row)))
+        rows["volatility_squeeze_breakout"].append(_side(_squeeze_breakout_signal(row)))
+        rows["strategy_family_router"].append(_side(_strategy_family_signal(row)))
         rows["htf_momentum"].append(htf_side)
         rows["regime_router"].append(_side(router_signal))
     return rows
@@ -746,6 +756,91 @@ def _micro_signal(row: dict[str, Any]) -> float:
         + 0.10 * _value(row, "depth_imbalance_top5")
         + 0.08 * _value(row, "book_imbalance_top")
     )
+
+
+def _persistent_micro_signal(row: dict[str, Any]) -> float:
+    signal = _micro_signal(row)
+    side = _side(signal)
+    if side is None or abs(signal) < 0.05:
+        return 0.0
+
+    components = (
+        _value(row, "order_flow_imbalance_1s"),
+        _value(row, "order_flow_imbalance_5s"),
+        _value(row, "taker_aggression_imbalance_1s"),
+        _value(row, "taker_aggression_imbalance_5s"),
+        _value(row, "taker_aggression_imbalance_15s"),
+        math.tanh(_value(row, "microprice_mid_bps")),
+        math.tanh(_value(row, "vamp_mid_bps")),
+        _value(row, "depth_imbalance_top5"),
+        _value(row, "book_imbalance_top"),
+    )
+    confirmations = sum(side * value > 0.0 for value in components)
+    strong_confirmations = sum(side * value >= 0.05 for value in components)
+    return signal if confirmations >= 6 and strong_confirmations >= 3 else 0.0
+
+
+def _impulse_pullback_signal(row: dict[str, Any]) -> float:
+    impulse = _value(row, "return_180s_pct")
+    side = _side(impulse)
+    if side is None or abs(impulse) < 0.0006:
+        return 0.0
+
+    persistent = _persistent_micro_signal(row)
+    if _side(persistent) != side:
+        return 0.0
+    signed_return_15s = side * _value(row, "return_15s_pct")
+    signed_return_60s = side * _value(row, "return_60s_pct")
+    if -0.0006 <= signed_return_15s <= 0.00015 and signed_return_60s >= -0.0004:
+        return side * (abs(impulse) + abs(persistent))
+    return 0.0
+
+
+def _flow_exhaustion_signal(row: dict[str, Any]) -> float:
+    impulse = _value(row, "return_180s_pct")
+    impulse_side = _side(impulse)
+    if impulse_side is None or abs(impulse) < 0.0010:
+        return 0.0
+
+    reverse_side = -impulse_side
+    flow = 0.45 * _value(row, "taker_aggression_imbalance_5s") + 0.55 * _value(
+        row, "taker_aggression_imbalance_15s"
+    )
+    book_pressure = (
+        0.30 * math.tanh(_value(row, "microprice_mid_bps"))
+        + 0.20 * math.tanh(_value(row, "vamp_mid_bps"))
+        + 0.25 * _value(row, "depth_imbalance_top5")
+        + 0.25 * _value(row, "book_imbalance_top")
+    )
+    stalled = impulse_side * _value(row, "return_15s_pct") <= 0.00005
+    if stalled and impulse_side * flow >= 0.15 and reverse_side * book_pressure >= 0.05:
+        return reverse_side * (abs(flow) + abs(book_pressure))
+    return 0.0
+
+
+def _squeeze_breakout_signal(row: dict[str, Any]) -> float:
+    range_pct = _value(row, "range_180s_pct")
+    range_position = _float_or_none(row.get("range_position_180s"))
+    if range_position is None or range_pct <= 0.0 or range_pct > 0.0015:
+        return 0.0
+
+    side = 1 if range_position >= 0.80 else -1 if range_position <= 0.20 else 0
+    if side == 0 or side * _value(row, "return_15s_pct") <= 0.0:
+        return 0.0
+    persistent = _persistent_micro_signal(row)
+    return persistent if _side(persistent) == side else 0.0
+
+
+def _strategy_family_signal(row: dict[str, Any]) -> float:
+    for signal in (
+        _flow_exhaustion_signal(row),
+        _impulse_pullback_signal(row),
+        _squeeze_breakout_signal(row),
+        _persistent_micro_signal(row),
+    ):
+        if _side(signal) is not None:
+            return signal
+    return 0.0
 
 
 def _htf_signal(row: dict[str, Any]) -> float:
