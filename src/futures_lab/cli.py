@@ -25,6 +25,7 @@ from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.readiness import evaluate_readiness
 from futures_lab.runtime import TradingRuntime
 from futures_lab.shadow_arena import ShadowArena, ShadowArenaConfig, summarize_shadow_arena
+from futures_lab.strategy_tournament import run_strategy_tournament
 
 
 def _record_deadline(seconds: int, *, current: datetime | None = None) -> datetime:
@@ -530,6 +531,19 @@ def main() -> None:
     atlas_parser.add_argument("--minimum-robust-trades", type=int, default=20)
     atlas_parser.add_argument("--output", type=Path, default=None)
 
+    tournament_parser = sub.add_parser(
+        "strategy-tournament",
+        help="Select one locked configuration per deterministic strategy family and judge it on holdout.",
+    )
+    tournament_parser.add_argument("--runs-root", type=Path, default=Path("/app/data/runs"))
+    tournament_parser.add_argument("--symbol", default="ETHUSDT")
+    tournament_parser.add_argument("--cost-bps", type=float, default=10.0)
+    tournament_parser.add_argument("--sample-seconds", type=int, default=60)
+    tournament_parser.add_argument("--max-gap-seconds", type=int, default=5)
+    tournament_parser.add_argument("--account-exposure", type=float, default=4.95)
+    tournament_parser.add_argument("--matched-coin-seeds", type=int, default=32)
+    tournament_parser.add_argument("--output", type=Path, default=None)
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -671,6 +685,23 @@ def main() -> None:
             discovery_fraction=args.discovery_fraction,
             account_exposure=args.account_exposure,
             minimum_robust_trades=args.minimum_robust_trades,
+        )
+        encoded = json.dumps(report, indent=2)
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+            print(json.dumps({"output": str(args.output), "bytes": args.output.stat().st_size}, indent=2))
+        else:
+            print(encoded)
+    elif args.command == "strategy-tournament":
+        report = run_strategy_tournament(
+            args.runs_root,
+            symbol=args.symbol,
+            cost_bps=args.cost_bps,
+            sample_seconds=args.sample_seconds,
+            max_gap_seconds=args.max_gap_seconds,
+            account_exposure=args.account_exposure,
+            matched_coin_seeds=args.matched_coin_seeds,
         )
         encoded = json.dumps(report, indent=2)
         if args.output is not None:
