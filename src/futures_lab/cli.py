@@ -20,6 +20,7 @@ from futures_lab.data_ops import (
 from futures_lab.first_touch import run_first_touch_study
 from futures_lab.latency_probe import build_probe_streams, run_latency_probe
 from futures_lab.live_canary import run_live_canary
+from futures_lab.market_atlas import run_market_atlas
 from futures_lab.replay import discover_raw_files, replay_files
 from futures_lab.readiness import evaluate_readiness
 from futures_lab.runtime import TradingRuntime
@@ -515,6 +516,20 @@ def main() -> None:
     first_touch_parser.add_argument("--account-exposure", type=float, default=20.0)
     first_touch_parser.add_argument("--max-selected-stop-bps", type=float, default=150.0)
 
+    atlas_parser = sub.add_parser(
+        "market-atlas",
+        help="Map ETH first-passage behavior and strategy economics across barriers, horizons, and regimes.",
+    )
+    atlas_parser.add_argument("--runs-root", type=Path, default=Path("/app/data/runs"))
+    atlas_parser.add_argument("--symbol", default="ETHUSDT")
+    atlas_parser.add_argument("--cost-bps", type=float, default=10.0)
+    atlas_parser.add_argument("--sample-seconds", type=int, default=60)
+    atlas_parser.add_argument("--max-gap-seconds", type=int, default=5)
+    atlas_parser.add_argument("--discovery-fraction", type=float, default=0.70)
+    atlas_parser.add_argument("--account-exposure", type=float, default=4.95)
+    atlas_parser.add_argument("--minimum-robust-trades", type=int, default=20)
+    atlas_parser.add_argument("--output", type=Path, default=None)
+
     compress_parser = sub.add_parser("compress-raw", help="Gzip raw JSONL files under data/raw_ws.")
     compress_parser.add_argument("--older-than-minutes", type=int, default=5)
     compress_parser.add_argument("--all", action="store_true", help="Compress even recently modified files. Use after a run has stopped.")
@@ -646,6 +661,24 @@ def main() -> None:
                 indent=2,
             )
         )
+    elif args.command == "market-atlas":
+        report = run_market_atlas(
+            args.runs_root,
+            symbol=args.symbol,
+            cost_bps=args.cost_bps,
+            sample_seconds=args.sample_seconds,
+            max_gap_seconds=args.max_gap_seconds,
+            discovery_fraction=args.discovery_fraction,
+            account_exposure=args.account_exposure,
+            minimum_robust_trades=args.minimum_robust_trades,
+        )
+        encoded = json.dumps(report, indent=2)
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+            print(json.dumps({"output": str(args.output), "bytes": args.output.stat().st_size}, indent=2))
+        else:
+            print(encoded)
     elif args.command == "compress-raw":
         print(
             json.dumps(
